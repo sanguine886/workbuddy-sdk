@@ -16,6 +16,8 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ matrix.go }}
+          # 本库无第三方依赖（无 go.sum），关闭模块缓存以免刷出无意义的告警。
+          cache: false
       - name: gofmt
         run: |
           unformatted=$(gofmt -l .)
