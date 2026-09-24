@@ -9,6 +9,23 @@ import (
 	"net/http"
 )
 
+// dropKey 返回去掉指定键的副本；键不存在时原样返回（避免无谓分配）。
+func dropKey(m map[string]any, key string) map[string]any {
+	if m == nil {
+		return nil
+	}
+	if _, ok := m[key]; !ok {
+		return m
+	}
+	out := make(map[string]any, len(m))
+	for k, v := range m {
+		if k != key {
+			out[k] = v
+		}
+	}
+	return out
+}
+
 // newSSEScanner 构造 SSE 行扫描器（单行上限 32 MiB）。
 func newSSEScanner(r io.Reader) *bufio.Scanner {
 	sc := bufio.NewScanner(r)
@@ -93,6 +110,10 @@ func (c *Client) Chat(ctx context.Context, req *ChatRequest) (*ChatResponse, err
 	}
 	body := *req
 	body.Stream = false
+	// 非流式必须确保 body 里没有 stream:true —— 若调用方把它塞进了 Extra，
+	// 合并时该键会被写入（因为建模字段 stream:false 被 omitempty 省略），
+	// 于是「非流式」请求被服务端当成流式处理。
+	body.Extra = dropKey(req.Extra, "stream")
 	payload, err := json.Marshal(&body)
 	if err != nil {
 		return nil, err
@@ -120,6 +141,8 @@ func (c *Client) ChatStream(ctx context.Context, req *ChatRequest, fn func(raw [
 	}
 	body := *req
 	body.Stream = true
+	// 由建模字段决定 stream， Extra 里的同名键一律剔除。
+	body.Extra = dropKey(req.Extra, "stream")
 	payload, err := json.Marshal(&body)
 	if err != nil {
 		return err

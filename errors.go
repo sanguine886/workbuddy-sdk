@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"unicode/utf8"
 )
 
 // 哨兵错误：配合 errors.Is 使用，便于调用方按类别分支。
@@ -131,9 +132,15 @@ func wrapStatus(err *APIError) error {
 	}
 }
 
+// truncate 把 s 截到最多 n 字节，且**不切断 UTF-8 字符**
+// （否则错误信息里会出现半个汉字组成的乱码）。
 func truncate(s string, n int) string {
 	if len(s) <= n {
 		return s
 	}
-	return s[:n]
+	cut := s[:n]
+	for len(cut) > 0 && !utf8.ValidString(cut) {
+		cut = cut[:len(cut)-1]
+	}
+	return cut
 }

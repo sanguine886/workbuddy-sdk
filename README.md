@@ -22,7 +22,7 @@ go get github.com/sanguine886/workbuddy-sdk
 
 ```go
 admin := wbsdk.NewClient("https://wb.example.com",
-	wbsdk.WithAdminCredentials("https://wb.example.com", "admin", "密码"),
+	wbsdk.WithAdminLogin("admin", "密码"), // 登录地址自动取自 baseURL，无需重复传
 )
 
 me, _ := admin.Me(ctx)
@@ -82,12 +82,14 @@ _ = admin.DoJSON(ctx, http.MethodGet, "/api/some/new/endpoint", nil, &out)
 | 管理面 | `/api` | HMAC 签名会话 Cookie（`wb_session`） |
 | 数据面 | `/v1`、`/v2`、`/responses` | 网关密钥（`Authorization: Bearer wbk_...`） |
 
-鉴权按路径前缀自动选择。管理面提供两种实现：
+鉴权按路径前缀自动选择。管理面提供三种方式：
 
-- `WithAdminCredentials(baseURL, user, pass)` —— 自动 `POST /api/login`，缓存会话
-  Cookie，收到 401 时失效并**重试一次**。登录是单飞的，且失败不重试，避免撞上
-  服务端「5 次失败锁 10 分钟」的登录风控。
-- `WithAdminCookie("wb_session=...")` —— 直接给一段已登录的 Cookie。
+- **`WithAdminLogin(user, pass)`** —— 推荐。自动 `POST {baseURL}/api/login`、缓存会话
+  Cookie，收到 401 时失效并**重登一次**。登录是单飞的（并发 401 只触发一次），
+  且失败不重试，避免撞上服务端「5 次失败锁 10 分钟」的登录风控。
+- `WithAdminCredentials(baseURL, user, pass)` —— 同上，但显式指定登录地址；适合把
+  同一份鉴权复用到多个 Client。
+- `WithAdminCookie("wb_session=...")` —— 直接给一段已登录的 Cookie（不自动续）。
 
 自定义可自行实现 `AdminAuth` / `GatewayKey` 接口，通过 `WithAdminAuth` /
 `WithGatewayKey` 注入。
@@ -114,6 +116,21 @@ if errors.As(err, &apiErr) {
 
 `Message` 可能是中文散文（管理面）或英文句子（网关面），本库**不解析文案**，
 原样暴露；`Raw` 保留完整响应体。
+
+## 重试与超时
+
+- **重试默认关闭**（本库主要面向管理面，写操作多，盲目重试会有副作用）。需要时：
+
+  ```go
+  c := wbsdk.NewClient(base, wbsdk.WithAdminLogin("admin", "pw"),
+      wbsdk.WithRetry(wbsdk.DefaultRetryPolicy())) // 或自定义 RetryPolicy
+  ```
+
+  开启后**只重试幂等方法**（GET / HEAD / OPTIONS），遇到 429 / 5xx 或网络错误时
+  按指数退避 + 抖动重试，并优先尊重 `Retry-After`。POST / PATCH / DELETE
+  **永不重试**，避免签名、签到这类操作被重复执行。
+- **超时默认不设限**（`WithTimeout` 可选）。流式调用（模型可能思考很久才吐第一个字）
+  需要长连接，固定超时会误杀；请用 `context` 控制单次调用的时限。
 
 ## 覆盖的接口
 

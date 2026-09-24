@@ -97,12 +97,18 @@ func normalizePath(p string) string {
 	return p
 }
 
-func isAdminPath(path string) bool { return strings.HasPrefix(path, "/api") }
+// hasPathPrefix 判断 path 是否落在某个**路径段前缀**下：
+// "/api" 匹配 "/api" 与 "/api/xxx"，但**不匹配** "/apifoo"。
+func hasPathPrefix(path, prefix string) bool {
+	return path == prefix || strings.HasPrefix(path, prefix+"/")
+}
+
+func isAdminPath(path string) bool { return hasPathPrefix(path, "/api") }
 
 func isGatewayPath(path string) bool {
-	return strings.HasPrefix(path, "/v1") ||
-		strings.HasPrefix(path, "/v2") ||
-		strings.HasPrefix(path, "/responses")
+	return hasPathPrefix(path, "/v1") ||
+		hasPathPrefix(path, "/v2") ||
+		hasPathPrefix(path, "/responses")
 }
 
 func (c *Client) newRequest(ctx context.Context, method, path string, query url.Values, body []byte, accept string) (*http.Request, error) {
@@ -125,7 +131,11 @@ func (c *Client) newRequest(ctx context.Context, method, path string, query url.
 			req.Header.Add(k, v)
 		}
 	}
-	req.Header.Set("User-Agent", c.userAgent)
+	// 仅在调用方没有通过 WithHeader("User-Agent", ...) 指定时才用默认值，
+	// 否则自定义 UA 会被这里的 Set 静默覆盖。
+	if req.Header.Get("User-Agent") == "" {
+		req.Header.Set("User-Agent", c.userAgent)
+	}
 	if accept != "" {
 		req.Header.Set("Accept", accept)
 	}
@@ -167,8 +177,41 @@ func (c *Client) injectAuth(ctx context.Context, path string, h http.Header) err
 	return nil
 }
 
-// send 执行请求；管理面收到 401 时失效凭据并**重试一次**（自动重登）。
+// send 执行请求，并在 RetryPolicy 允许时对**幂等请求**做退避重试。
 func (c *Client) send(ctx context.Context, method, path string, query url.Values, body []byte, accept string) (*http.Response, error) {
+	if c.retry == nil {
+		return c.doOnce(ctx, method, path, query, body, accept)
+	}
+	policy := c.retry.normalized()
+	for attempt := 0; ; attempt++ {
+		resp, err := c.doOnce(ctx, method, path, query, body, accept)
+		if attempt >= policy.MaxRetries || !retryable(method, policy, resp, err) {
+			return resp, err
+		}
+		delay := policy.backoff(attempt, resp)
+		if resp != nil {
+			drainAndClose(resp.Body)
+		}
+		if serr := sleepCtx(ctx, delay); serr != nil {
+			return nil, serr
+		}
+	}
+}
+
+// retryable 判断这次结果是否值得重试。**只重试幂等方法**（GET / HEAD / OPTIONS），
+// 写操作即使命中策略也绝不重试。
+func retryable(method string, p RetryPolicy, resp *http.Response, err error) bool {
+	if !idempotentMethod(method) {
+		return false
+	}
+	if err != nil {
+		return p.retryTransportErrors()
+	}
+	return resp != nil && p.statusRetryable(resp.StatusCode)
+}
+
+// doOnce 执行一次请求；管理面收到 401 时失效凭据并**重试一次**（自动重登）。
+func (c *Client) doOnce(ctx context.Context, method, path string, query url.Values, body []byte, accept string) (*http.Response, error) {
 	req, err := c.newRequest(ctx, method, path, query, body, accept)
 	if err != nil {
 		return nil, err

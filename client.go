@@ -5,22 +5,26 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
 const sessionCookieName = "wb_session"
 
-// Client 是 workbuddy-manager 客户端。并发安全。
+// Client 是 workbuddy-manager 客户端。
 //
-// NewClient 不做任何网络或资源分配；底层 *http.Client 在首次请求时才创建。
+// 并发安全：底层 *http.Client 惰性构建且并发复用；realm 用原子读写；
+// 鉴权实现（PasswordAuth 等）各自内部同步。NewClient 不做任何网络或资源分配。
 type Client struct {
 	baseURL   string
-	realm     Realm
 	userAgent string
 	headers   http.Header
 	admin     AdminAuth
 	key       GatewayKey
 	log       *slog.Logger
+
+	realm atomic.Value // string
+	retry *RetryPolicy
 
 	hcOnce    sync.Once
 	hc        *http.Client
@@ -36,18 +40,28 @@ func NewClient(baseURL string, opts ...Option) *Client {
 	for _, fn := range opts {
 		fn(&o)
 	}
-	return &Client{
-		baseURL:   strings.TrimRight(baseURL, "/"),
-		realm:     o.realm,
+	base := strings.TrimRight(baseURL, "/")
+
+	admin := o.admin
+	if o.loginSet {
+		// 登录地址取自客户端 baseURL，调用方无需重复传。
+		admin = NewPasswordAuth(base, o.loginUser, o.loginPass)
+	}
+
+	c := &Client{
+		baseURL:   base,
 		userAgent: o.userAgent,
 		headers:   o.headers,
-		admin:     o.admin,
+		admin:     admin,
 		key:       o.key,
 		log:       o.log,
+		retry:     o.retry,
 		provided:  o.hc,
 		transport: o.transport,
 		timeout:   o.timeout,
 	}
+	c.realm.Store(string(o.realm))
+	return c
 }
 
 func (c *Client) httpClient() *http.Client {
@@ -76,7 +90,12 @@ func (c *Client) CloseIdleConnections() {
 func (c *Client) BaseURL() string { return c.baseURL }
 
 // Realm 返回默认版本。
-func (c *Client) Realm() Realm { return c.realm }
+func (c *Client) Realm() Realm {
+	if v, ok := c.realm.Load().(string); ok {
+		return Realm(v)
+	}
+	return RealmCN
+}
 
-// SetRealm 修改默认版本（并发使用时慎用）。
-func (c *Client) SetRealm(r Realm) { c.realm = r }
+// SetRealm 修改默认版本（并发安全，可在运行期调用）。
+func (c *Client) SetRealm(r Realm) { c.realm.Store(string(r)) }

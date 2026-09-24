@@ -116,6 +116,9 @@ func (a *PasswordAuth) Invalidate() {
 }
 
 func (a *PasswordAuth) loginLocked(ctx context.Context) error {
+	if a.baseURL == "" {
+		return errors.New("wbsdk: PasswordAuth 缺少 baseURL —— 请用 NewPasswordAuth(baseURL, ...)，或在 Client 上改用 WithAdminLogin")
+	}
 	payload, err := json.Marshal(map[string]string{
 		"username": a.username,
 		"password": a.password,

@@ -26,7 +26,7 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	admin := wbsdk.NewClient(base, wbsdk.WithAdminCredentials(base, user, pass))
+	admin := wbsdk.NewClient(base, wbsdk.WithAdminLogin(user, pass))
 
 	me, err := admin.Me(ctx)
 	if err != nil {

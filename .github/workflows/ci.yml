@@ -12,8 +12,8 @@ jobs:
       matrix:
         go: ['1.22', '1.23']
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version: ${{ matrix.go }}
           # 本库无第三方依赖（无 go.sum），关闭模块缓存以免刷出无意义的告警。

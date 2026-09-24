@@ -26,7 +26,7 @@ func main() {
 
 	// 管理面：用户名密码登录 + 401 自动重登。
 	admin := wbsdk.NewClient(base,
-		wbsdk.WithAdminCredentials(base, user, pass),
+		wbsdk.WithAdminLogin(user, pass),
 	)
 	me, err := admin.Me(ctx)
 	if err != nil {

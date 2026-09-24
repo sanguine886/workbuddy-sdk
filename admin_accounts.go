@@ -21,8 +21,8 @@ func (c *Client) effectiveRealm(r Realm) Realm {
 	if r != RealmAny {
 		return r
 	}
-	if c.realm != RealmAny {
-		return c.realm
+	if def := c.Realm(); def != RealmAny {
+		return def
 	}
 	return RealmCN
 }

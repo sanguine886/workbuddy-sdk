@@ -14,8 +14,14 @@ type options struct {
 	admin     AdminAuth
 	key       GatewayKey
 	realm     Realm
+	retry     *RetryPolicy
 	userAgent string
 	log       *slog.Logger
+
+	// 便捷登录：由 Client 用自身 baseURL 构造 PasswordAuth。
+	loginSet  bool
+	loginUser string
+	loginPass string
 }
 
 func defaultOptions() options {
@@ -39,7 +45,10 @@ func WithTransport(rt http.RoundTripper) Option {
 	return func(o *options) { o.transport = rt }
 }
 
-// WithTimeout 设置 HTTP 客户端总超时（默认 0，不设限）。
+// WithTimeout 设置 HTTP 客户端总超时。
+//
+// 默认 0 = 不设限——流式请求（模型可能思考很久才吐第一个字）需要长时间连接，
+// 用固定超时会误杀。约束应由调用方通过 context 控制。
 func WithTimeout(d time.Duration) Option {
 	return func(o *options) { o.timeout = d }
 }
@@ -54,12 +63,24 @@ func WithUserAgent(ua string) Option {
 	return func(o *options) { o.userAgent = ua }
 }
 
-// WithAdminAuth 设置管理面鉴权。
+// WithAdminAuth 设置管理面鉴权（自定义实现或内置实现）。
 func WithAdminAuth(a AdminAuth) Option {
 	return func(o *options) { o.admin = a }
 }
 
-// WithAdminCredentials 便捷设置「用户名 + 密码」鉴权（自动登录 + 401 重登）。
+// WithAdminLogin 用「用户名 + 密码」登录管理面，自动登录并在 401 时重登。
+//
+// 登录地址取自 NewClient 的 baseURL，因此无需重复传——这是推荐用法。
+func WithAdminLogin(username, password string) Option {
+	return func(o *options) {
+		o.loginSet = true
+		o.loginUser = username
+		o.loginPass = password
+	}
+}
+
+// WithAdminCredentials 是 WithAdminLogin 的显式 baseURL 版本，
+// 适用于把同一份鉴权复用到多个指向同一服务的 Client。
 // baseURL 应与 NewClient 的地址一致（子路径部署时带前缀）。
 func WithAdminCredentials(baseURL, username, password string) Option {
 	return func(o *options) { o.admin = NewPasswordAuth(baseURL, username, password) }
@@ -78,6 +99,14 @@ func WithGatewayKey(key string) Option {
 // WithRealm 设置默认版本（cn / global）；数据面与管理面按需覆盖。
 func WithRealm(r Realm) Option {
 	return func(o *options) { o.realm = r }
+}
+
+// WithRetry 开启对**幂等请求**（GET / HEAD / OPTIONS）的自动重试。
+//
+// 默认关闭；非幂等方法（POST/PATCH/DELETE）永不重试，避免副作用重复。
+// 传入零值 RetryPolicy 也可（等价 DefaultRetryPolicy）。
+func WithRetry(p RetryPolicy) Option {
+	return func(o *options) { o.retry = &p }
 }
 
 // WithLogger 注入一个 slog 记录器（当前仅用于调试输出，可为空）。
