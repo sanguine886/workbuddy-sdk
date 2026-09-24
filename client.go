@@ -23,8 +23,9 @@ type Client struct {
 	key       GatewayKey
 	log       *slog.Logger
 
-	realm atomic.Value // string
-	retry *RetryPolicy
+	realm        atomic.Value // string
+	retry        *RetryPolicy
+	sseEventMode bool
 
 	hcOnce    sync.Once
 	hc        *http.Client
@@ -49,16 +50,17 @@ func NewClient(baseURL string, opts ...Option) *Client {
 	}
 
 	c := &Client{
-		baseURL:   base,
-		userAgent: o.userAgent,
-		headers:   o.headers,
-		admin:     admin,
-		key:       o.key,
-		log:       o.log,
-		retry:     o.retry,
-		provided:  o.hc,
-		transport: o.transport,
-		timeout:   o.timeout,
+		baseURL:      base,
+		userAgent:    o.userAgent,
+		headers:      o.headers,
+		admin:        admin,
+		key:          o.key,
+		log:          o.log,
+		retry:        o.retry,
+		sseEventMode: o.sseEventMode,
+		provided:     o.hc,
+		transport:    o.transport,
+		timeout:      o.timeout,
 	}
 	c.realm.Store(string(o.realm))
 	return c

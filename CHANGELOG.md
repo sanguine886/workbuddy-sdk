@@ -3,6 +3,20 @@
 本文件记录 workbuddy-sdk 的版本变更。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.1.2] - 2026-09-24
+
+### 新增
+
+- **`WithSSEEventMode(true)`**：流式解析支持「按事件」模式。同一事件内的多条
+  `data:` 行按 SSE 规范以 `\n` 拼接后整体交付，注释与 `event:` / `id:` / `retry:`
+  字段忽略。默认仍是「按行」模式（零解析，兼容既有行为）。事件模式的载荷是新
+  分配的切片，可跨回调保留。
+- **可运行的 godoc 示例**：`ExampleNewClient`、`ExampleClient_Chat`、
+  `ExampleClient_ChatStream`、`ExampleWithSSEEventMode`、`ExampleClient_Accounts`、
+  `ExampleClient_Keys` —— 均带 `// Output`，`go test` 会校验。
+- 回归测试：多行 data 拼接、事件分隔与 EOF flush、注释忽略、按行模式默认行为、
+  事件模式载荷跨回调有效。
+
 ## [0.1.1] - 2026-09-23
 
 自查后的一轮修复与增强。

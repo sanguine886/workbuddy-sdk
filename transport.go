@@ -74,7 +74,15 @@ func (c *Client) DoStream(ctx context.Context, method, path string, payload []by
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxRespBytes))
 		return wrapStatus(newAPIError(resp.StatusCode, raw))
 	}
-	sc := newSSEScanner(resp.Body)
+	return c.streamSSE(resp.Body, fn)
+}
+
+// streamSSE 按当前模式解析 SSE 流并交付载荷（模式见 WithSSEEventMode）。
+func (c *Client) streamSSE(body io.Reader, fn func(raw []byte) error) error {
+	if c.sseEventMode {
+		return parseSSEEvents(body, fn)
+	}
+	sc := newSSEScanner(body)
 	for sc.Scan() {
 		payload, ok := extractSSEDataLine(sc.Bytes())
 		if !ok {

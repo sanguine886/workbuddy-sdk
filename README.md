@@ -132,6 +132,25 @@ if errors.As(err, &apiErr) {
 - **超时默认不设限**（`WithTimeout` 可选）。流式调用（模型可能思考很久才吐第一个字）
   需要长连接，固定超时会误杀；请用 `context` 控制单次调用的时限。
 
+## 流式解析
+
+默认**按行**交付：每条 `data:` 行回调一次。这是零解析的原始通道，与 OpenAI /
+Anthropic 的「一条事件一行 data」约定一致，也与 codex-sdk 的口径相同。
+
+对接严格实现 SSE 的服务端（或 data 跨多行）时，用 `WithSSEEventMode(true)`
+切换为**按事件**交付：同一事件内的多条 `data:` 行按规范以 `\n` 拼接后整体回调，
+注释行与 `event:` / `id:` / `retry:` 字段忽略，事件以空行分隔。
+
+```go
+c := wbsdk.NewClient(base,
+	wbsdk.WithGatewayKey("wbk_xxx"),
+	wbsdk.WithSSEEventMode(true),
+)
+```
+
+> **两种模式的字节有效期不同**：按行模式的载荷引用内部扫描缓冲，**仅在回调执行
+> 期间有效**；按事件模式的载荷是新分配的切片，**可跨回调保留**。
+
 ## 覆盖的接口
 
 ### 数据面（`/v1/*`）

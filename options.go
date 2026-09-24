@@ -7,16 +7,17 @@ import (
 )
 
 type options struct {
-	hc        *http.Client
-	transport http.RoundTripper
-	timeout   time.Duration
-	headers   http.Header
-	admin     AdminAuth
-	key       GatewayKey
-	realm     Realm
-	retry     *RetryPolicy
-	userAgent string
-	log       *slog.Logger
+	hc           *http.Client
+	transport    http.RoundTripper
+	timeout      time.Duration
+	headers      http.Header
+	admin        AdminAuth
+	key          GatewayKey
+	realm        Realm
+	retry        *RetryPolicy
+	sseEventMode bool
+	userAgent    string
+	log          *slog.Logger
 
 	// 便捷登录：由 Client 用自身 baseURL 构造 PasswordAuth。
 	loginSet  bool
@@ -107,6 +108,17 @@ func WithRealm(r Realm) Option {
 // 传入零值 RetryPolicy 也可（等价 DefaultRetryPolicy）。
 func WithRetry(p RetryPolicy) Option {
 	return func(o *options) { o.retry = &p }
+}
+
+// WithSSEEventMode 切换流式解析模式。
+//
+//   - false（默认，"按行"）：每条 `data:` 行各交付一次。OpenAI / Anthropic 风格
+//     都是「一条事件一行 data」，这也是 codex-sdk 的口径，够用且零解析。
+//   - true（"按事件"）：按 SSE 规范切分事件，同一事件内**多条 data: 行以 "\n"
+//     拼接**后整体交付；注释行（`:` 开头）与 event / id / retry 字段忽略。
+//     对接严格实现 SSE 的服务端或多行 data 的流时用它。
+func WithSSEEventMode(enabled bool) Option {
+	return func(o *options) { o.sseEventMode = enabled }
 }
 
 // WithLogger 注入一个 slog 记录器（当前仅用于调试输出，可为空）。
