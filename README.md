@@ -92,8 +92,9 @@ _ = admin.DoJSON(ctx, http.MethodGet, "/api/some/new/endpoint", nil, &out)
 - `WithAdminCookie("wb_session=...")` —— 直接给一段已登录的 Cookie（不自动续）。
 - `WithAdminToken("wbt_...")` —— 用**管理面 API Token**（`Authorization: Bearer`），
   适合脚本 / CI：无需用户名密码与会话往返，优先级高于 Cookie，且不触发 401 重登。
-  **需服务端支持作用域化 API Token**（上游尚未实现，设计见
-  [ithtelab/workbuddy-manager 的 API Token 设计](https://github.com/ithtelab/workbuddy-manager/pull/76)）。
+  **需服务端支持作用域化 API Token**（上游 **v1.0.68** 起支持；设计见
+  [docs/api-tokens.md](https://github.com/ithtelab/workbuddy-manager/blob/main/docs/api-tokens.md)）。
+  用会话（`WithAdminLogin`）建令牌，再用 `WithAdminToken` 全程 headless 调用即可。
 
 自定义可自行实现 `AdminAuth` / `GatewayKey` 接口，通过 `WithAdminAuth` /
 `WithGatewayKey` 注入。

@@ -3,6 +3,23 @@
 本文件记录 workbuddy-sdk 的版本变更。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.1.4] - 2026-09-24
+
+### 新增
+
+- **`Tokens()`**：管理面作用域化 API Token 的管理（`List` / `Create` / `Update` /
+  `Delete`），对齐上游 **v1.0.68** 新增的 `/api/tokens`。`Create` 返回的明文
+  **仅此一次**；`TokenPatch.ExpiresAt` 传指向 0 的指针表示「改为永不过期」。
+- 示例与冒烟新增**令牌全链路**：用会话建令牌 → 用 `WithAdminToken` 鉴权 →
+  校验权限边界（readonly 拒写、admin 令牌被「会话专属」接口拒、令牌不能管令牌、
+  删除后立即 401）。
+
+### 变更
+
+- README 的 API Token 链接改指已合并的
+  [docs/api-tokens.md](https://github.com/ithtelab/workbuddy-manager/blob/main/docs/api-tokens.md)
+  （此前指向设计 PR）。
+
 ## [0.1.3] - 2026-09-24
 
 ### 新增

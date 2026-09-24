@@ -13,6 +13,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	wbsdk "github.com/sanguine886/workbuddy-sdk"
@@ -164,6 +165,93 @@ func main() {
 		log.Fatalf("FAIL catalog.get: %v", err)
 	}
 	fmt.Printf("OK   catalog.get: source=%s models=%d\n", cat.Source, len(cat.Models))
+
+	// ── 访问令牌（上游 v1.0.68+）：会话建令牌 → 令牌鉴权 → 权限边界 ──
+	tokRO, err := admin.Tokens().Create(ctx, "smoke-ro", "readonly", nil)
+	if err != nil {
+		log.Fatalf("FAIL tokens.create(readonly): %v", err)
+	}
+	if !strings.HasPrefix(tokRO.Token, "wbt_") {
+		log.Fatalf("FAIL tokens.create: 明文前缀不对: %q", tokRO.Token)
+	}
+	fmt.Printf("OK   tokens.create(readonly): id=%d prefix=%s\n", tokRO.ID, tokRO.Prefix)
+
+	ro := wbsdk.NewClient(base, wbsdk.WithAdminToken(tokRO.Token))
+	meRO, err := ro.Me(ctx)
+	if err != nil {
+		log.Fatalf("FAIL 令牌鉴权: %v", err)
+	}
+	if meRO.Role != "viewer" {
+		log.Fatalf("FAIL readonly 令牌角色应为 viewer，得到 %q", meRO.Role)
+	}
+	fmt.Printf("OK   令牌鉴权: %s role=%s\n", meRO.Username, meRO.Role)
+
+	if res, err := ro.Do(ctx, http.MethodPost, "/api/accounts/checkin-all", nil); err != nil {
+		log.Fatalf("FAIL readonly 调写接口: %v", err)
+	} else if res.StatusCode != http.StatusForbidden {
+		log.Fatalf("FAIL readonly 调写接口应 403，得到 %d", res.StatusCode)
+	}
+	fmt.Println("OK   readonly 令牌调写接口被拒（403）")
+
+	if res, err := ro.Do(ctx, http.MethodGet, "/api/tokens", nil); err != nil {
+		log.Fatalf("FAIL readonly 调令牌管理: %v", err)
+	} else if res.StatusCode != http.StatusForbidden {
+		log.Fatalf("FAIL readonly 调令牌管理应 403，得到 %d", res.StatusCode)
+	}
+	fmt.Println("OK   readonly 令牌调令牌管理被拒（403）")
+
+	tokADM, err := admin.Tokens().Create(ctx, "smoke-adm", "admin", nil)
+	if err != nil {
+		log.Fatalf("FAIL tokens.create(admin): %v", err)
+	}
+	adm := wbsdk.NewClient(base, wbsdk.WithAdminToken(tokADM.Token))
+	meADM, err := adm.Me(ctx)
+	if err != nil {
+		log.Fatalf("FAIL admin 令牌鉴权: %v", err)
+	}
+	if meADM.Role != "admin" {
+		log.Fatalf("FAIL admin 令牌角色应为 admin，得到 %q", meADM.Role)
+	}
+	fmt.Println("OK   admin 令牌鉴权（role=admin）")
+
+	// admin 令牌可调**一般**写接口
+	k, err := adm.Keys().Create(ctx, wbsdk.KeyIn{Name: "by-token"})
+	if err != nil {
+		log.Fatalf("FAIL admin 令牌建密钥: %v", err)
+	}
+	if err := adm.Keys().Delete(ctx, k.ID); err != nil {
+		log.Fatalf("FAIL admin 令牌删密钥: %v", err)
+	}
+	fmt.Println("OK   admin 令牌可调一般写接口（建/删密钥）")
+
+	// 但**会话专属**接口仍被拒（清日志）
+	if res, err := adm.Do(ctx, http.MethodPost, "/api/logs/clear", nil); err != nil {
+		log.Fatalf("FAIL admin 令牌调会话专属: %v", err)
+	} else if res.StatusCode != http.StatusForbidden {
+		log.Fatalf("FAIL 会话专属接口应 403，得到 %d", res.StatusCode)
+	}
+	fmt.Println("OK   admin 令牌调会话专属接口被拒（403）")
+
+	// admin 令牌也不能管令牌
+	if res, err := adm.Do(ctx, http.MethodGet, "/api/tokens", nil); err != nil {
+		log.Fatalf("FAIL admin 令牌调令牌管理: %v", err)
+	} else if res.StatusCode != http.StatusForbidden {
+		log.Fatalf("FAIL admin 令牌调令牌管理应 403，得到 %d", res.StatusCode)
+	}
+	fmt.Println("OK   admin 令牌调令牌管理被拒（403）")
+
+	// 删除后立即失效
+	if err := admin.Tokens().Delete(ctx, tokRO.ID); err != nil {
+		log.Fatalf("FAIL tokens.delete: %v", err)
+	}
+	if _, err := ro.Me(ctx); !errors.Is(err, wbsdk.ErrUnauthorized) {
+		log.Fatalf("FAIL 删除后应 401，得到 %v", err)
+	}
+	fmt.Println("OK   令牌删除后立即失效（401）")
+
+	if err := admin.Tokens().Delete(ctx, tokADM.ID); err != nil {
+		log.Fatalf("FAIL tokens.delete(admin): %v", err)
+	}
 
 	// 会话自动重登：吊销当前用户全部会话（旧 cookie 立即失效），
 	// 下一次请求应 401 → 自动重登 → 成功。
