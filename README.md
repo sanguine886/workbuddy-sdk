@@ -82,7 +82,7 @@ _ = admin.DoJSON(ctx, http.MethodGet, "/api/some/new/endpoint", nil, &out)
 | 管理面 | `/api` | HMAC 签名会话 Cookie（`wb_session`） |
 | 数据面 | `/v1`、`/v2`、`/responses` | 网关密钥（`Authorization: Bearer wbk_...`） |
 
-鉴权按路径前缀自动选择。管理面提供三种方式：
+鉴权按路径前缀自动选择。管理面提供四种方式：
 
 - **`WithAdminLogin(user, pass)`** —— 推荐。自动 `POST {baseURL}/api/login`、缓存会话
   Cookie，收到 401 时失效并**重登一次**。登录是单飞的（并发 401 只触发一次），
@@ -90,6 +90,10 @@ _ = admin.DoJSON(ctx, http.MethodGet, "/api/some/new/endpoint", nil, &out)
 - `WithAdminCredentials(baseURL, user, pass)` —— 同上，但显式指定登录地址；适合把
   同一份鉴权复用到多个 Client。
 - `WithAdminCookie("wb_session=...")` —— 直接给一段已登录的 Cookie（不自动续）。
+- `WithAdminToken("wbt_...")` —— 用**管理面 API Token**（`Authorization: Bearer`），
+  适合脚本 / CI：无需用户名密码与会话往返，优先级高于 Cookie，且不触发 401 重登。
+  **需服务端支持作用域化 API Token**（上游尚未实现，设计见
+  [ithtelab/workbuddy-manager 的 API Token 设计](https://github.com/ithtelab/workbuddy-manager/pull/76)）。
 
 自定义可自行实现 `AdminAuth` / `GatewayKey` 接口，通过 `WithAdminAuth` /
 `WithGatewayKey` 注入。
@@ -213,6 +217,13 @@ versions, _ := admin.System().Versions(ctx)
 ```sh
 make vet test     # 编译检查 + 单元测试
 gofmt -l -w .     # 格式化
+```
+
+版本号只有一个来源（[`version.go`](version.go)）。发行构建可用 ldflags 覆盖，
+避免「发版了但代码里还写着旧版本」：
+
+```sh
+go build -ldflags "-X github.com/sanguine886/workbuddy-sdk.version=$(git describe --tags)"
 ```
 
 ## 许可

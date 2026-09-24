@@ -16,12 +16,13 @@ const sessionCookieName = "wb_session"
 // 并发安全：底层 *http.Client 惰性构建且并发复用；realm 用原子读写；
 // 鉴权实现（PasswordAuth 等）各自内部同步。NewClient 不做任何网络或资源分配。
 type Client struct {
-	baseURL   string
-	userAgent string
-	headers   http.Header
-	admin     AdminAuth
-	key       GatewayKey
-	log       *slog.Logger
+	baseURL    string
+	userAgent  string
+	headers    http.Header
+	admin      AdminAuth
+	adminToken string
+	key        GatewayKey
+	log        *slog.Logger
 
 	realm        atomic.Value // string
 	retry        *RetryPolicy
@@ -49,11 +50,17 @@ func NewClient(baseURL string, opts ...Option) *Client {
 		admin = NewPasswordAuth(base, o.loginUser, o.loginPass)
 	}
 
+	ua := o.userAgent
+	if ua == "" {
+		ua = defaultUserAgent()
+	}
+
 	c := &Client{
 		baseURL:      base,
-		userAgent:    o.userAgent,
+		userAgent:    ua,
 		headers:      o.headers,
 		admin:        admin,
+		adminToken:   o.adminToken,
 		key:          o.key,
 		log:          o.log,
 		retry:        o.retry,

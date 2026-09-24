@@ -3,6 +3,23 @@
 本文件记录 workbuddy-sdk 的版本变更。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.1.3] - 2026-09-24
+
+### 新增
+
+- **`WithAdminToken("wbt_...")`**：用管理面 API Token（`Authorization: Bearer`）
+  访问 `/api/*`，适合脚本 / CI——无需用户名密码与会话往返。优先级高于 Cookie，
+  且 401 时**不触发**重登重试。需服务端支持「作用域化 API Token」。
+- **`Version()`**：库版本号；默认值见 `version.go`，发行构建可用
+  `-ldflags -X github.com/sanguine886/workbuddy-sdk.version=...` 覆盖。
+- 回归测试：默认 UA 携带版本号、Token 注入与优先级、401 不重试、
+  Token 不串到数据面。
+
+### 变更
+
+- 默认 User-Agent 由 `Version()` 派生，不再写死——修掉「发到 v0.1.2 了、UA 还写着
+  0.1」这类不一致。
+
 ## [0.1.2] - 2026-09-24
 
 ### 新增

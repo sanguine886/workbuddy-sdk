@@ -12,6 +12,7 @@ type options struct {
 	timeout      time.Duration
 	headers      http.Header
 	admin        AdminAuth
+	adminToken   string
 	key          GatewayKey
 	realm        Realm
 	retry        *RetryPolicy
@@ -27,9 +28,10 @@ type options struct {
 
 func defaultOptions() options {
 	return options{
-		realm:     RealmCN,
-		userAgent: "workbuddy-sdk/0.1 (+https://github.com/sanguine886/workbuddy-sdk)",
-		headers:   make(http.Header),
+		realm:   RealmCN,
+		headers: make(http.Header),
+		// userAgent 留空，由 NewClient 用 defaultUserAgent() 填充——
+		// 这样版本号只有一个来源（version.go / ldflags）。
 	}
 }
 
@@ -85,6 +87,17 @@ func WithAdminLogin(username, password string) Option {
 // baseURL 应与 NewClient 的地址一致（子路径部署时带前缀）。
 func WithAdminCredentials(baseURL, username, password string) Option {
 	return func(o *options) { o.admin = NewPasswordAuth(baseURL, username, password) }
+}
+
+// WithAdminToken 用**管理面 API Token**（`Authorization: Bearer`）访问 /api/*。
+//
+// 它是给脚本 / CI 用的长期凭据，免去「用户名密码 + 会话 Cookie」的往返；
+// 一旦设置，管理面请求就**不再**走 Cookie（也不会触发 401 自动重登）。
+//
+// 需要服务端支持「作用域化 API Token」（见上游设计文档）；服务端尚未支持时，
+// 用 WithAdminLogin / WithAdminCookie 即可。
+func WithAdminToken(token string) Option {
+	return func(o *options) { o.adminToken = token }
 }
 
 // WithAdminCookie 便捷设置一段静态会话 Cookie。

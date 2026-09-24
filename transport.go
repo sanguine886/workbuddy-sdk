@@ -160,8 +160,13 @@ func (c *Client) newRequest(ctx context.Context, method, path string, query url.
 func (c *Client) injectAuth(ctx context.Context, path string, h http.Header) error {
 	switch {
 	case isAdminPath(path):
+		// API Token 优先（它是长期凭据，且不参与 401 重登）。
+		if c.adminToken != "" {
+			h.Set("Authorization", "Bearer "+c.adminToken)
+			return nil
+		}
 		if c.admin == nil {
-			return errors.New("wbsdk: 该接口需要管理面鉴权，请用 WithAdminAuth / WithAdminCredentials / WithAdminCookie 配置")
+			return errors.New("wbsdk: 该接口需要管理面鉴权，请用 WithAdminLogin / WithAdminToken / WithAdminCookie 配置")
 		}
 		cookie, err := c.admin.Cookie(ctx)
 		if err != nil {
