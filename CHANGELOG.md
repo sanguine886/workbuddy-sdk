@@ -3,6 +3,20 @@
 本文件记录 workbuddy-sdk 的版本变更。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.1.5] - 2026-09-24
+
+### 新增
+
+- **`Healthz()` / `AdminHealthz()`**：网关与管理端的**存活探测**，**无需任何凭据**，
+  适合监控探针。为此在鉴权注入里加了「已知公开路径」白名单——不再因为「没配凭据」
+  而在客户端就报错，也不会把凭据发到公开端点上。
+- 与最新上游（**v1.0.68**）做了一次**端点差分**（机械比对，非印象）：87 个端点中
+  85 个有 SDK 覆盖；剩余为两个**别名路径**（`/v2/chat/completions`、`/responses`）——
+  别名可用 `Do` / `DoStream` 直达。
+- **`scripts/audit_endpoints.py`**：把上面这次核对固化成脚本 ——
+  `python scripts/audit_endpoints.py /path/to/workbuddy-manager`，
+  退出码可直接用于 CI / 发版检查（只有出现「未声明的未覆盖端点」才非 0）。
+
 ## [0.1.4] - 2026-09-24
 
 ### 新增

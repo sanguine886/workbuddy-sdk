@@ -1,0 +1,27 @@
+name: upstream-drift
+
+# 定期核对：workbuddy-manager 新增/改名了端点，而本 SDK 还没跟上。
+#
+# 为什么**不放在每次 push 的 CI 里**：那会因为上游的改动让本仓库的 PR 变红，
+# 而 PR 作者往往与「上游新增了端点」无关。漂移检查适合定时跑（或手动触发），
+# 有结果了再开一个跟进 PR。
+on:
+  schedule:
+    - cron: '0 3 * * 1' # 每周一 03:00 UTC
+  workflow_dispatch:
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: 拉取上游（只用于比对端点，不参与构建）
+        uses: actions/checkout@v7
+        with:
+          repository: ithtelab/workbuddy-manager
+          path: upstream
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: 端点差分
+        run: python scripts/audit_endpoints.py upstream

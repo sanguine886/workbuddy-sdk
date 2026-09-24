@@ -185,6 +185,10 @@ c := wbsdk.NewClient(base,
 | `Playground()` | `Models` `Chat` `ChatStream`（内置测试台，仅管理员） |
 | 会话 | `Me` `Logout` `RevokeSessions` |
 | 逃生舱 | `Do` `DoJSON` `DoStream`（覆盖尚未封装的接口） |
+| 存活探测 | `Healthz`（网关 + 上游连通性）`AdminHealthz`（管理端）——**均无需凭据** |
+
+> 两个别名路径（网关同时注册的 `/v2/chat/completions`、以及 baseURL 不含 `/v1`
+> 时的 `/responses`）未做成具名方法，需要时用 `Do` / `DoStream` 直接调用即可。
 
 示例：
 
@@ -218,6 +222,13 @@ versions, _ := admin.System().Versions(ctx)
 ```sh
 make vet test     # 编译检查 + 单元测试
 gofmt -l -w .     # 格式化
+```
+
+核对本库是否跟上了 workbuddy-manager 的最新端点（按路径段比对，非印象）：
+
+```sh
+python scripts/audit_endpoints.py /path/to/workbuddy-manager
+# 退出码 0 = 覆盖齐（或只剩已声明的别名路径）；1 = 出现未声明的未覆盖端点
 ```
 
 版本号只有一个来源（[`version.go`](version.go)）。发行构建可用 ldflags 覆盖，

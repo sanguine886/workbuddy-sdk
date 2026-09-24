@@ -113,6 +113,12 @@ func hasPathPrefix(path, prefix string) bool {
 
 func isAdminPath(path string) bool { return hasPathPrefix(path, "/api") }
 
+// isPublicPath 报告该路径**无需鉴权**。对这些路径不注入凭据，也不因为没有
+// 配置凭据而报错——否则「没登录也想探个活」会被客户端自己挡下来。
+func isPublicPath(path string) bool {
+	return path == "/healthz" || path == "/api/healthz"
+}
+
 func isGatewayPath(path string) bool {
 	return hasPathPrefix(path, "/v1") ||
 		hasPathPrefix(path, "/v2") ||
@@ -158,6 +164,9 @@ func (c *Client) newRequest(ctx context.Context, method, path string, query url.
 
 // injectAuth 按路径前缀注入鉴权头。
 func (c *Client) injectAuth(ctx context.Context, path string, h http.Header) error {
+	if isPublicPath(path) {
+		return nil
+	}
 	switch {
 	case isAdminPath(path):
 		// API Token 优先（它是长期凭据，且不参与 401 重登）。
