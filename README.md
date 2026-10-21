@@ -79,8 +79,9 @@ _ = admin.DoJSON(ctx, http.MethodGet, "/api/some/new/endpoint", nil, &out)
 
 | 面 | 前缀 | 凭据 |
 |---|---|---|
-| 管理面 | `/api` | HMAC 签名会话 Cookie（`wb_session`） |
+| 管理面 | `/api` | HMAC 签名会话 Cookie（`wb_session`）或管理面 API Token（`wbt_`） |
 | 数据面 | `/v1`、`/v2`、`/responses` | 网关密钥（`Authorization: Bearer wbk_...`） |
+| 公开 | `/healthz`、`/api/healthz`、`/api/claim/*` | 无（红包抽奖端刻意公开，收链接的人本来就没账号） |
 
 鉴权按路径前缀自动选择。管理面提供四种方式：
 
@@ -134,6 +135,8 @@ if errors.As(err, &apiErr) {
   开启后**只重试幂等方法**（GET / HEAD / OPTIONS），遇到 429 / 5xx 或网络错误时
   按指数退避 + 抖动重试，并优先尊重 `Retry-After`。POST / PATCH / DELETE
   **永不重试**，避免签名、签到这类操作被重复执行。
+  文件上传（`System().UploadPackage`）同样**不重试、也不做 401 自动重登**：
+  请求体是流式的一次性数据，重发需要调用方自己重开 reader。
 - **超时默认不设限**（`WithTimeout` 可选）。流式调用（模型可能思考很久才吐第一个字）
   需要长连接，固定超时会误杀；请用 `context` 控制单次调用的时限。
 
@@ -166,21 +169,26 @@ c := wbsdk.NewClient(base,
 | `Responses` / `ResponsesStream` | OpenAI Responses 协议透传 |
 | `Messages` / `MessagesStream` | Anthropic Messages 协议透传 |
 | `Models` | 当前密钥可见的模型列表（已按版本与白名单裁剪） |
+| `Usage` | 当前密钥的用量与额度（`tokens` / `credits`，不限额度为 `null`） |
 
 ### 管理面（`/api/*`）
 
 | 服务 | 方法 |
 |---|---|
-| `Accounts()` | `List` `StartAuth` `PollAuth` `Checkin` `CheckinAll` `Credits` `RefreshCredits` `SetDisabled` `SetNote` `Test` `Refresh` `ClearCooling` `Delete` `CheckinLogs` `ClearCheckinLogs` `TaskLogs` `CollectTaskLogs` `ClearTaskLogs` `UpstreamLogs` `Restart` |
+| `Accounts()` | `List` `StartAuth` `PollAuth` `Checkin` `CheckinAll` `Credits` `RefreshCredits` `SetDisabled` `SetNote` `SetProxy` `SetWeight` `ForceCooling` `Move` `Test` `Refresh` `ClearCooling` `Delete` `CheckinLogs` `ClearCheckinLogs` `TaskLogs` `CollectTaskLogs` `ClearTaskLogs` `UpstreamLogs` `Restart` |
 | `Keys()` | `List` `Create` `Update` `Delete` `ResetUsage` `CheckModels` |
-| `Stats()` | `Summary` `Daily` `ByModel` `ByKey` `Upstream` `RepairUsage` `RebuildUsage` |
+| `Stats()` | `Summary` `Daily` `Hourly` `CreditsFlow` `ByModel` `ByKey` `Upstream` `RepairUsage` `RebuildUsage` |
 | `Logs()` | `List` `Clear` |
 | `Security()` | `Config` `SaveConfig` `Rules` `AddRule` `RemoveRule` `Logs` `ClearLogs` |
-| `Settings()` | `Upstream` `SaveUpstream` `TestUpstash` `ReloadState` `ReloadUpstream` `ModelMap` `SaveModelMap` |
+| `Settings()` | `Upstream` `SaveUpstream` `TestUpstash` `ReloadState` `ReloadUpstream` `ModelMap` `SaveModelMap` `GitHubToken` `SaveGitHubToken` `GitHubMirror` `SaveGitHubMirror` |
 | `Users()` | `List` `Add` `Update` `Remove` `AuditLogs` |
-| `System()` | `Sysinfo` `UpdateStatus` `CheckUpdate` `Versions` `Changelog` `Update` `SetUpstreamRef` |
+| `System()` | `Sysinfo` `UpdateStatus` `CheckUpdate` `Versions` `Changelog` `Update` `SetUpstreamRef` `Package` `UploadPackage` `UploadPackageFile` `DeletePackage` |
 | `Tasks()` | `RunStatus` `RunStart` `RunStop` `ClaimSchedule` `SaveClaimSchedule` |
-| `Upstream()` | `Status` `Models` |
+| `Upstream()` | `Status` `Models`（**上游运行时**状态与模型简表） |
+| `Upstreams()` | `List` `Create` `Update` `Delete` `Probe`（**本端接了几个上游**，即账号池分组） |
+| `Proxies()` | `Routes` `CreateRoute` `UpdateRoute` `DeleteRoute` `ImportRoutes` `ProbeRoute` `Bindings` `BindAccounts` `AutoAssign` `AccountRoutes` `SavePool` `Settings` `SaveSettings` `ProbeSettings` |
+| `PGSync()` | `Get` `Save` `Test` `Export` `Import` `Status`（PostgreSQL 异地备份） |
+| `RedPackets()` | `Create` `List` `Get` `Revoke` `ClaimInfo` `Claim`（后两个**公开**） |
 | `Catalog()` | `Get`（模型中心，含显示名与推理档位） |
 | `Playground()` | `Models` `Chat` `ChatStream`（内置测试台，仅管理员） |
 | 会话 | `Me` `Logout` `RevokeSessions` |
@@ -202,6 +210,16 @@ fmt.Println(logs.Total, len(logs.Items))
 _, _ = admin.Security().AddRule(ctx, "allow", "10.0.0.0/8", "office")
 users, _ := admin.Users().List(ctx)
 versions, _ := admin.System().Versions(ctx)
+
+// 出口线路：读列表（凭据已脱敏）→ 探一次 → 给两台账号绑上
+routes, _ := admin.Proxies().Routes(ctx, nil)
+probe, _ := admin.Proxies().ProbeRoute(ctx, routes.Routes[0].Name)
+fmt.Println(probe.OK, probe.MS, probe.ExitIP)
+_, _ = admin.Proxies().BindAccounts(ctx, routes.Routes[0].Name, []string{"a.json", "b.json"}, true, nil)
+
+// 网关侧：这把密钥自己用了多少
+usage, _ := gateway.Usage(ctx)
+fmt.Println(usage.Tokens.Used, usage.Credits.Remaining) // Remaining 为 nil = 不限额度
 ```
 
 > 字段类型与官方前端 `web/lib/types.ts` 对齐；服务端新增字段会被

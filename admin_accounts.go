@@ -280,3 +280,57 @@ func (s *AccountsService) Restart(ctx context.Context) (*ActionResult, error) {
 	}
 	return &out, nil
 }
+
+// SetProxy 给账号绑定出口线路（空串 = 跟随池策略）。
+//
+// 改完服务端会重载上游：线路在上游是**加载时**解析进内存的，不重载不生效。
+// upstreamID 为 nil 表示默认分组。
+func (s *AccountsService) SetProxy(ctx context.Context, file, proxy string, upstreamID *int) (*AccountProxyResult, error) {
+	var out AccountProxyResult
+	body := map[string]string{"proxy": proxy}
+	path := accountPath(file) + "/proxy"
+	if _, err := s.c.doJSON(ctx, http.MethodPut, path, groupQuery(upstreamID), body, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// SetWeight 设置账号手写权重（乘数，不是优先级）：2 ≈ 同等条件下被抽中的机会翻倍。
+//
+// weight 传 0 = 恢复默认（等价 1.0，并从账号文件里删掉该键）。
+func (s *AccountsService) SetWeight(ctx context.Context, file string, weight float64, upstreamID *int) (*AccountWeightResult, error) {
+	var out AccountWeightResult
+	body := map[string]float64{"weight": weight}
+	path := accountPath(file) + "/weight"
+	if _, err := s.c.doJSON(ctx, http.MethodPut, path, groupQuery(upstreamID), body, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ForceCooling 强制设定账号级冷却（会重启一次上游来生效）。
+//
+// 返回原始结果字典：服务端除了 ok / message / until，还会带回「改了哪些状态位」。
+// 注意该接口只支持默认分组（其它分组没有对应的 state.json 路径，服务端回 409）。
+func (s *AccountsService) ForceCooling(ctx context.Context, file string, in ForceCoolingIn, upstreamID *int) (map[string]any, error) {
+	var out map[string]any
+	path := accountPath(file) + "/force-cooling"
+	if _, err := s.c.doJSON(ctx, http.MethodPost, path, groupQuery(upstreamID), in, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// Move 把账号**转移**到另一个分组（移动的是账号文件本身，凭证不改）。
+//
+// toUpstreamID 传 0 表示默认分组；源分组由 upstreamID 指定（nil = 默认分组）。
+// 目标分组已有同名文件、或两侧没有登记账号目录时服务端回 409。
+func (s *AccountsService) Move(ctx context.Context, file string, toUpstreamID int, upstreamID *int) (*AccountMoveResult, error) {
+	var out AccountMoveResult
+	body := map[string]int{"to_upstream_id": toUpstreamID}
+	path := accountPath(file) + "/move"
+	if _, err := s.c.doJSON(ctx, http.MethodPost, path, groupQuery(upstreamID), body, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}

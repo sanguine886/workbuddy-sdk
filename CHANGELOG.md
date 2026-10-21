@@ -3,6 +3,51 @@
 本文件记录 workbuddy-sdk 的版本变更。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.2.0] - 2026-10-20
+
+对齐 workbuddy-manager **v2.7.0**：148 个端点里 146 个有具名方法，剩下两个是
+**别名路径**（`/v2/chat/completions`、`/responses`），用 `Do` / `DoStream` 直达。
+`scripts/audit_endpoints.py` 的退出码为 0。
+
+### 新增
+
+- **`Proxies()`**：出口线路表与绑定（`Routes` / `CreateRoute` / `UpdateRoute` /
+  `DeleteRoute` / `ImportRoutes` / `ProbeRoute` / `Bindings` / `BindAccounts` /
+  `AutoAssign` / `AccountRoutes`），池配置（`SavePool`），面板自身的出口代理
+  （`Settings` / `SaveSettings` / `ProbeSettings`）。多分组部署可带 `upstream_id`。
+- **`PGSync()`**：PostgreSQL 异地备份 —— `Get` / `Save` / `Test` / `Export` /
+  `Import` / `Status`。密码读取时为掩码，保存时回传掩码表示「不改动」。
+- **`RedPackets()`**：红包（批量发放带额度的密钥）—— `Create`（返回含**明文
+  密钥，仅此一次**）/ `List` / `Get` / `Revoke`；以及**公开**的抽奖端
+  `ClaimInfo` / `Claim`：不需要任何凭据，为此把 `/api/claim/*` 加入客户端的
+  「公开路径」白名单，既不注入凭据也不会因「没配凭据」被自己拦下。
+- **`Upstreams()`**：多上游（账号池分组）—— `List` / `Create` / `Update` /
+  `Delete` / `Probe`。与 `Settings().Upstream()`（上游自己的 config.json）不是
+  一回事，注意区分。
+- **`Usage()`**：网关侧的 `GET /v1/usage`，查**当前密钥**的用量与额度
+  （`tokens` / `credits` 各带 `used` / `limit` / `remaining`，不限额度为 `null`）。
+- **`Stats().Hourly` / `Stats().CreditsFlow`**：某天按小时的用量（服务端固定
+  返回 24 个桶），以及积分收支（收入 / 支出 / 净额三套口径都在）。
+- **`Settings().GitHubToken` / `SaveGitHubToken` / `GitHubMirror` /
+  `SaveGitHubMirror`**：GitHub Token 只回掩码，镜像可设可清。
+- **`System().Package` / `UploadPackage` / `UploadPackageFile` / `DeletePackage`**：
+  离线升级包。上传走**流式 multipart**，不把整包读进内存。
+- **`Accounts().SetProxy` / `SetWeight` / `ForceCooling` / `Move`**：账号级线路
+  绑定、手写权重（乘数）、强制冷却、跨分组转移。
+
+### 改进
+
+- `scripts/audit_endpoints.py` 现在解析文件里**所有** `APIRouter`（此前只认第一个，
+  于是同一文件里第二个 router（红包抽奖端）的端点被静默漏检）。
+- 上传接口单独说明：**不参与重试、也不做 401 自动重登** —— 请求体是一次性的，
+  重登要重发，而流式体已经被消费。会话过期时会直接看到 401，重登后再传即可。
+
+### 说明
+
+- 没有破坏性变更：既有方法签名一律未动，新能力全部以新方法 / 新服务加入。
+- 新增类型集中在 `types_admin.go`；字段仍与官方前端 `web/lib/types.ts` 对齐，
+  可空字段用指针区分「缺失 / null」与零值。
+
 ## [0.1.5] - 2026-09-24
 
 ### 新增

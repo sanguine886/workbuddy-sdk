@@ -2,9 +2,14 @@ package wbsdk
 
 import (
 	"context"
+	"fmt"
+	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 )
 
 // SystemService 封装一键更新与版本信息（/api/system/*）。
@@ -85,4 +90,51 @@ func (s *SystemService) SetUpstreamRef(ctx context.Context, ref string) (map[str
 		return nil, err
 	}
 	return out, nil
+}
+
+// Package 读取已上传的离线升级包元信息（Present=false 表示记录还在但文件被清掉了）。
+func (s *SystemService) Package(ctx context.Context) (*UpdatePackage, error) {
+	var out UpdatePackage
+	if _, err := s.c.doJSON(ctx, http.MethodGet, "/api/system/update-package", nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// UploadPackage 上传离线升级包（发布页下载的那个 .tar.gz）。
+//
+// r 会被**流式**读取，不必先读进内存；filename 只用于显示。expectedSHA256
+// 为空表示只做结构校验（服务端会解开确认是 tar.gz 且带 .version）。
+//
+// 注意：上传接口不参与重试、也不会自动重登（请求体是一次性的），会话过期时
+// 会直接返回 401。
+func (s *SystemService) UploadPackage(ctx context.Context, filename string, r io.Reader, expectedSHA256 string) (*UpdatePackage, error) {
+	if filename == "" {
+		filename = "update-package.tar.gz"
+	}
+	fields := map[string]string{}
+	if want := strings.TrimSpace(expectedSHA256); want != "" {
+		fields["expected_sha256"] = want
+	}
+	var out UpdatePackage
+	if _, err := s.c.doUpload(ctx, "/api/system/update-package", "file", filename, r, fields, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// UploadPackageFile 从磁盘文件上传离线升级包（UploadPackage 的便捷包装）。
+func (s *SystemService) UploadPackageFile(ctx context.Context, path, expectedSHA256 string) (*UpdatePackage, error) {
+	fh, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("wbsdk: 打开升级包: %w", err)
+	}
+	defer fh.Close()
+	return s.UploadPackage(ctx, filepath.Base(path), fh, expectedSHA256)
+}
+
+// DeletePackage 删掉已上传的升级包（更新完成后清理）。
+func (s *SystemService) DeletePackage(ctx context.Context) error {
+	_, err := s.c.doJSON(ctx, http.MethodDelete, "/api/system/update-package", nil, nil, nil)
+	return err
 }

@@ -9,3 +9,7 @@
 .idea/
 .vscode/
 *.swp
+
+# Python（audit_endpoints.py 的字节码缓存）
+__pycache__/
+*.pyc

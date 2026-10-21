@@ -159,3 +159,59 @@ func ExampleClient_Keys() {
 	fmt.Println(key.ID, key.Key)
 	// Output: 7 wbk_secret_shown_once
 }
+
+// 数据面：查当前密钥自己的用量与额度（不限额度时 Limit / Remaining 为 nil）。
+func ExampleClient_Usage() {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{
+			"object": "key.usage",
+			"key": {"name": "ci", "prefix": "wbk_abcd", "realm": "cn", "enabled": true, "models": ["glm-5.2"]},
+			"tokens": {"used": 1000, "limit": 1000000, "remaining": 999000},
+			"credits": {"used": 1, "limit": 10, "remaining": 9},
+			"last_used_at": 1727000000, "snapshot_at": 1727000100, "data_source": "panel-recorded"
+		}`)
+	}))
+	defer srv.Close()
+
+	c := wbsdk.NewClient(srv.URL, wbsdk.WithGatewayKey("wbk_xxx"))
+	usage, err := c.Usage(context.Background())
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("%s tokens=%d/%d credits=%d/%d\n",
+		usage.Key.Name, usage.Tokens.Used, *usage.Tokens.Limit,
+		usage.Credits.Used, *usage.Credits.Limit)
+	// Output: ci tokens=1000/1000000 credits=1/10
+}
+
+// 管理面：读出口线路（凭据已脱敏），再给两台账号绑上。
+func ExampleClient_Proxies() {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/proxy-routes":
+			_, _ = io.WriteString(w, `{"routes":[
+				{"name":"hk1","scheme":"http","host":"1.2.3.4","port":8080,"has_auth":true,
+				 "masked":"http://u:***@1.2.3.4:8080","weight":100,"enabled":true,"bound":2}
+			],"default":"","schemes":["http"],"bound_total":2}`)
+		case "/api/proxy-routes/hk1/accounts":
+			_, _ = io.WriteString(w, `{"name":"hk1","bound":true,"updated":2,"skipped":[]}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	c := wbsdk.NewClient(srv.URL, wbsdk.WithAdminCookie("wb_session=x"))
+	routes, err := c.Proxies().Routes(context.Background(), nil)
+	if err != nil {
+		log.Fatal(err)
+	}
+	res, err := c.Proxies().BindAccounts(context.Background(), routes.Routes[0].Name, []string{"a.json", "b.json"}, true, nil)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("%s 绑定 %d 台\n", res.Name, res.Updated)
+	// Output: hk1 绑定 2 台
+}
