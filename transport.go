@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"strings"
@@ -115,8 +116,12 @@ func isAdminPath(path string) bool { return hasPathPrefix(path, "/api") }
 
 // isPublicPath 报告该路径**无需鉴权**。对这些路径不注入凭据，也不因为没有
 // 配置凭据而报错——否则「没登录也想探个活」会被客户端自己挡下来。
+//
+// /api/claim/* 是红包抽奖端：收到分享链接的人本来就没有账号，服务端刻意公开
+// （防滥用靠「每 IP 一次」+ 128 位抽奖码 + 有效期）。把它算进来才不会因为
+// 「没配管理面凭据」被客户端自己拦下。
 func isPublicPath(path string) bool {
-	return path == "/healthz" || path == "/api/healthz"
+	return path == "/healthz" || path == "/api/healthz" || hasPathPrefix(path, "/api/claim")
 }
 
 func isGatewayPath(path string) bool {
@@ -295,6 +300,67 @@ func (c *Client) doJSON(ctx context.Context, method, path string, query url.Valu
 	if out != nil && len(res.Body) > 0 {
 		if err := json.Unmarshal(res.Body, out); err != nil {
 			return res, fmt.Errorf("wbsdk: 解析响应 (%s %s): %w", method, path, err)
+		}
+	}
+	return res, nil
+}
+
+// doUpload 发送一次 multipart/form-data 上传（**流式**：不在内存里攒整份文件）。
+//
+// 上传是非幂等的，因此不参与重试；也**不做 401 自动重登** —— 重登要重发请求体，
+// 而流式请求体已经被消费掉了。会话过期时调用方会直接看到 401，重登后再传一次。
+func (c *Client) doUpload(ctx context.Context, path, field, filename string, src io.Reader, fields map[string]string, out any) (*RawResponse, error) {
+	pr, pw := io.Pipe()
+	// 无论走哪条返回路径都要关读端：否则写端会卡在 io.Copy 上泄漏一个 goroutine。
+	defer pr.Close()
+
+	mw := multipart.NewWriter(pw)
+	contentType := mw.FormDataContentType()
+	go func() {
+		err := func() error {
+			for k, v := range fields {
+				if werr := mw.WriteField(k, v); werr != nil {
+					return werr
+				}
+			}
+			part, werr := mw.CreateFormFile(field, filename)
+			if werr != nil {
+				return werr
+			}
+			if _, cerr := io.Copy(part, src); cerr != nil {
+				return cerr
+			}
+			return mw.Close()
+		}()
+		_ = pw.CloseWithError(err)
+	}()
+
+	req, err := c.newRequest(ctx, http.MethodPost, path, nil, nil, acceptJSON)
+	if err != nil {
+		return nil, err
+	}
+	// 请求体由这里接管：newRequest 只在传了 body 时才设 Content-Type，
+	// 而 multipart 的边界只有 Writer 知道，所以必须手动设。
+	req.Body = pr
+	req.ContentLength = -1
+	req.Header.Set("Content-Type", contentType)
+
+	resp, err := c.httpClient().Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxRespBytes))
+	if err != nil {
+		return nil, fmt.Errorf("wbsdk: 读取响应失败: %w", err)
+	}
+	res := &RawResponse{StatusCode: resp.StatusCode, Header: resp.Header, Body: raw}
+	if res.StatusCode >= 400 {
+		return res, wrapStatus(newAPIError(res.StatusCode, raw))
+	}
+	if out != nil && len(raw) > 0 {
+		if uerr := json.Unmarshal(raw, out); uerr != nil {
+			return res, fmt.Errorf("wbsdk: 解析响应 (POST %s): %w", path, uerr)
 		}
 	}
 	return res, nil

@@ -80,3 +80,46 @@ func (s *SettingsService) SaveModelMap(ctx context.Context, m map[string]string)
 	}
 	return out, nil
 }
+
+// GitHubToken 读取 GitHub Token 的生效状态（**只回掩码**）。
+//
+// Source 为 "env" 时说明值由部署注入，面板填的那份不生效。
+func (s *SettingsService) GitHubToken(ctx context.Context) (*GitHubToken, error) {
+	var out GitHubToken
+	if _, err := s.c.doJSON(ctx, http.MethodGet, "/api/settings/github-token", nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// SaveGitHubToken 保存面板这份 GitHub Token（空串 = 清除）。不回明文。
+func (s *SettingsService) SaveGitHubToken(ctx context.Context, token string) (*GitHubToken, error) {
+	var out GitHubToken
+	body := map[string]string{"token": token}
+	if _, err := s.c.doJSON(ctx, http.MethodPut, "/api/settings/github-token", nil, body, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// GitHubMirror 读取 GitHub 镜像基址与来源（国内机器直连 GitHub 超时时用）。
+func (s *SettingsService) GitHubMirror(ctx context.Context) (*GitHubMirror, error) {
+	var out GitHubMirror
+	if _, err := s.c.doJSON(ctx, http.MethodGet, "/api/settings/github-mirror", nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// SaveGitHubMirror 保存镜像基址（空串 = 清除，回落到环境变量）。
+//
+// 只接受「协议 + 主机 + 可选路径」：带查询串或 # 片段会被拒（拼出来的地址必然
+// 是错误页）。
+func (s *SettingsService) SaveGitHubMirror(ctx context.Context, mirror string) (*GitHubMirror, error) {
+	var out GitHubMirror
+	body := map[string]string{"mirror": mirror}
+	if _, err := s.c.doJSON(ctx, http.MethodPut, "/api/settings/github-mirror", nil, body, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}

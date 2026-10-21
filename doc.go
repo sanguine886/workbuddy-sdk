@@ -6,11 +6,15 @@
 //
 //   - 数据面（Data Plane）：/v1/*、/v2/chat/completions、/responses、
 //     /v1/messages。鉴权用网关密钥（Authorization: Bearer wbk_...）。
-//     Chat / ChatStream / Responses / Messages / Models。
-//   - 管理面（Control Plane）：/api/*。鉴权用 HMAC 签名会话 Cookie（wb_session）。
-//     Accounts / Keys / Stats / Logs / Security / Settings / Users / System /
-//     Tasks / Upstream / Catalog / Playground，以及会话方法 Me / Logout /
+//     Chat / ChatStream / Responses / Messages / Models / Usage。
+//   - 管理面（Control Plane）：/api/*。鉴权用 HMAC 签名会话 Cookie（wb_session）
+//     或管理面 API Token（wbt_）。Accounts / Keys / Stats / Logs / Security /
+//     Settings / Users / System / Tasks / Upstream / Upstreams / Proxies /
+//     PGSync / RedPackets / Catalog / Playground，以及会话方法 Me / Logout /
 //     RevokeSessions。
+//
+// 例外：红包抽奖端（/api/claim/*）由服务端刻意公开（收到分享链接的人本来就没有
+// 账号），本库对它**不注入任何凭据**，也不要求配置凭据。
 //
 // # 边界
 //

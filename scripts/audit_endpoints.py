@@ -50,12 +50,22 @@ def collect_endpoints(upstream_root: pathlib.Path) -> list[tuple[str, str, str]]
     eps: list[tuple[str, str, str]] = []
     for f in sorted(routers.glob('*.py')):
         src = f.read_text(encoding='utf-8')
-        m = re.search(r"APIRouter\(\s*prefix\s*=\s*['\"]([^'\"]*)['\"]", src)
-        prefix = m.group(1) if m else ''
+        # 一个文件里可能有**多个** APIRouter（例如红包装在 redpackets.py 里又单独
+        # 挂了一个公开的 claim_router）。只认第一个的话，后面那些 router 的端点会
+        # 被静默漏检——这个脚本的一个教训就是「别相信印象，去解析」。
+        # 注意有的 router 不写 prefix（路径自己带全，如 gateway.py），所以前缀取
+        # 不到时按空串处理，而不是把这个 router 整个跳过。
+        prefixes = {}
+        for m in re.finditer(r"^(\w+)\s*=\s*APIRouter\((.*)\)", src, re.MULTILINE):
+            pm = re.search(r"prefix\s*=\s*['\"]([^'\"]*)['\"]", m.group(2))
+            prefixes[m.group(1)] = pm.group(1) if pm else ''
         for mm in re.finditer(
-            r"@router\.(get|post|put|patch|delete)\(\s*['\"]([^'\"]*)['\"]", src
+            r"@(\w+)\.(get|post|put|patch|delete)\(\s*['\"]([^'\"]*)['\"]", src
         ):
-            eps.append((mm.group(1).upper(), prefix + mm.group(2), f.name))
+            var, method, path = mm.group(1), mm.group(2), mm.group(3)
+            if var not in prefixes:
+                continue
+            eps.append((method.upper(), prefixes[var] + path, f.name))
     return eps
 
 

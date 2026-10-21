@@ -43,6 +43,38 @@ func (s *StatsService) Daily(ctx context.Context, days int, realm Realm) ([]Usag
 	return out, nil
 }
 
+// Hourly 按小时聚合某一天（day 形如 "2026-09-23"，空 = 今天）。
+//
+// 「今日」趋势图用它：范围只有一天时按天聚合只会得到一根柱子。服务端**固定
+// 返回 24 个桶**（没数据的补 0），与 Daily 同一套口径（含 Failed 的算法）。
+func (s *StatsService) Hourly(ctx context.Context, day string, realm Realm) ([]UsageHourPoint, error) {
+	q := realmQuery(realm)
+	if day != "" {
+		q.Set("day", day)
+	}
+	var out []UsageHourPoint
+	if _, err := s.c.doJSON(ctx, http.MethodGet, "/api/stats/hourly", q, nil, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// CreditsFlow 拉取积分收支（近 N 天，含今天）。
+//
+// 收入与支出是**两套口径**（收入来自余额增加的流水，按查询时刻归日，是近似值；
+// 支出来自每次调用的真实扣费），所以三个合计都给，别只拿 Net 下结论。
+func (s *StatsService) CreditsFlow(ctx context.Context, days int, realm Realm) (*CreditsFlow, error) {
+	q := realmQuery(realm)
+	if days > 0 {
+		q.Set("days", strconv.Itoa(days))
+	}
+	var out CreditsFlow
+	if _, err := s.c.doJSON(ctx, http.MethodGet, "/api/stats/credits", q, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // ByModel 按模型聚合。
 func (s *StatsService) ByModel(ctx context.Context, days int, realm Realm) ([]UsageBreakdown, error) {
 	q := realmQuery(realm)
