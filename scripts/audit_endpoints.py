@@ -6,15 +6,25 @@
 
 退出码：0 = 全部覆盖（或只剩已声明的别名路径）；1 = 有未覆盖端点（可用于 CI / 发版检查）。
 
-## 为什么按「路径段」比而不是字符串前缀
+## 比较规则（被写坏过三次，教训都留在这里）
 
-这个脚本被写坏过两次，教训留在注释里，免得下次再犯：
-
-  * 只做 `lit.startswith('/api')` —— 会把 SDK 里**路由前缀分类**用的常量
+  * **第一次**：只做 `lit.startswith('/api')` —— 会把 SDK 里路由前缀分类用的常量
     `"/api"`（`transport.go` 的 `isAdminPath`）当成端点，于是 `/api/*` 全部假阳性；
-  * 放宽正则后又收进裸 `"/"`，`target.startswith("/")` **恒真**，变成全部「已覆盖」。
+  * **第二次**：放宽正则后收进裸 `"/"`，`target.startswith("/")` **恒真**，变成全部
+    「已覆盖」；
+  * **第三次**：按「静态前缀段」比较时，只要求 SDK 里有 `"/api/accounts"`，于是
+    `/api/accounts/export`、`/api/accounts/refresh-plan/run` 这类**更深的**端点被
+    前缀吃掉，报 0 未覆盖而实际有十几个没有具名方法。
 
-所以：按段比较，并且把已知的「前缀匹配器」字面量排除。
+现在的规则按端点形状分三种：
+
+  1. **无路径参数**：SDK 必须有**完全相等**的字面量（如 `/api/accounts/export`）；
+  2. **参数在末尾**：SDK 必须有到参数为止的前缀字面量（`/api/accounts/`）；
+  3. **参数在中间**：除前缀外，参数之后的每个**静态段连续段**都要有对应字面量
+     （`/api/accounts/{filename}/proxy` 需要 `"/proxy"`；`/api/proxy-routes/{name}/accounts`
+     需要 `"/accounts"`）。SDK 用「前缀 + 逃逸后的值 + 尾巴」拼接，尾巴就是这里要的。
+
+这样嵌套路径再也藏不住，同时不会把 `accountPath(file) + "/proxy"` 这种写法误判。
 """
 from __future__ import annotations
 
@@ -35,14 +45,49 @@ def segs(path: str) -> list[str]:
     return [s for s in path.strip('/').split('/') if s]
 
 
-def ep_segs(path: str) -> list[str]:
-    """端点路径的**静态**段（遇到路由参数就停）。"""
-    out: list[str] = []
-    for s in path.strip('/').split('/'):
-        if s.startswith('{') or s == '%s':
-            break
-        out.append(s)
-    return out
+def is_param(seg: str) -> bool:
+    # FastAPI 的 {name} / {name:path}；%s 是模板里可能出现的写法
+    return seg.startswith('{') or seg in ('%s', '%d')
+
+
+def split_endpoint(path: str) -> tuple[list[str], list[list[str]]]:
+    """把端点拆成（静态前缀, 参数之后的静态段连续段们）。
+
+    例：``/api/accounts/{filename}/proxy`` → (``[api, accounts]``, ``[[proxy]]``)；
+    无参数的端点 → (``[api, accounts, export]``, ``[]``)。
+    """
+    all_segs = [s for s in path.strip('/').split('/') if s]
+    prefix: list[str] = []
+    runs: list[list[str]] = []
+    seen_param = False
+    run: list[str] = []
+    for s in all_segs:
+        if is_param(s):
+            if seen_param and run:
+                runs.append(run)
+            run = []
+            seen_param = True
+            continue
+        if seen_param:
+            run.append(s)
+        else:
+            prefix.append(s)
+    if run:
+        runs.append(run)
+    return prefix, runs
+
+
+def missing_reasons(path: str, lits: list[list[str]]) -> list[str]:
+    """返回该端点**缺少**的字面量（空列表 = 已覆盖）。"""
+    prefix, runs = split_endpoint(path)
+    lacks: list[str] = []
+    if prefix and not any(ls == prefix for ls in lits):
+        # 无参数时前缀就是整条路径，提示里说清楚是「整条」还是「前缀」
+        lacks.append('/' + '/'.join(prefix) + ('/' if runs else ''))
+    for run in runs:
+        if not any(ls == run for ls in lits):
+            lacks.append('/' + '/'.join(run))
+    return lacks
 
 
 def collect_endpoints(upstream_root: pathlib.Path) -> list[tuple[str, str, str]]:
@@ -94,20 +139,22 @@ def main() -> int:
     eps = collect_endpoints(upstream_root)
     lits = collect_sdk_literals(sdk_root)
 
-    missed: list[tuple[str, str, str]] = []
+    missed: list[tuple[str, str, str, list[str]]] = []
     for method, path, fname in eps:
-        want = ep_segs(path)
-        if not any(ls and ls == want[:len(ls)] for ls in lits):
-            missed.append((method, path, fname))
+        lacks = missing_reasons(path, lits)
+        if lacks:
+            missed.append((method, path, fname, lacks))
 
     print(f'上游端点 {len(eps)}，SDK 字面量（按段，去噪）{len(lits)}，未覆盖 {len(missed)}')
 
     unexpected = []
-    for method, path, fname in missed:
+    for method, path, fname, lacks in missed:
         tag = '（已声明的别名，逃生舱可达）' if path in KNOWN_ALIASES else '  ← 需要处理'
         if path not in KNOWN_ALIASES:
             unexpected.append(path)
         print(f'  {method:6} {path:44} ({fname}){tag}')
+        if path not in KNOWN_ALIASES:
+            print(f'         缺字面量: {", ".join(lacks)}')
 
     return 1 if unexpected else 0
 

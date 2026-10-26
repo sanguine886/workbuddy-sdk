@@ -305,11 +305,31 @@ func (c *Client) doJSON(ctx context.Context, method, path string, query url.Valu
 	return res, nil
 }
 
-// doUpload 发送一次 multipart/form-data 上传（**流式**：不在内存里攒整份文件）。
+// UploadPart 是 multipart 请求里的一段文件内容。
+//
+// Reader 只被读一次（流式转发，不在内存里攒整份文件），所以每次重试都要
+// 重新给一个能从头读的 Reader —— 这也是上传不参与自动重试的原因。
+type UploadPart struct {
+	Field    string    // 表单字段名（服务端 FastAPI 的 File(...) 参数名）
+	Filename string    // 文件名；留空时由调用方补默认值
+	Reader   io.Reader // 文件内容
+}
+
+// doUpload 发送一次单文件 multipart/form-data 上传（**流式**：不在内存里攒整份文件）。
 //
 // 上传是非幂等的，因此不参与重试；也**不做 401 自动重登** —— 重登要重发请求体，
 // 而流式请求体已经被消费掉了。会话过期时调用方会直接看到 401，重登后再传一次。
 func (c *Client) doUpload(ctx context.Context, path, field, filename string, src io.Reader, fields map[string]string, out any) (*RawResponse, error) {
+	return c.doMultipart(ctx, path, nil,
+		[]UploadPart{{Field: field, Filename: filename, Reader: src}}, fields, out)
+}
+
+// doMultipart 发送一次 multipart/form-data 请求，可带多个文件段与普通字段。
+//
+// 与 doUpload 同一套约束：不重试、不做 401 自动重登（请求体已流式消费）。
+// 若同时有普通字段，它们会写在文件段**之前** —— 服务端先看到参数再看到文件，
+// 出错时才有机会在读完整份文件前拒绝。
+func (c *Client) doMultipart(ctx context.Context, path string, query url.Values, parts []UploadPart, fields map[string]string, out any) (*RawResponse, error) {
 	pr, pw := io.Pipe()
 	// 无论走哪条返回路径都要关读端：否则写端会卡在 io.Copy 上泄漏一个 goroutine。
 	defer pr.Close()
@@ -323,19 +343,21 @@ func (c *Client) doUpload(ctx context.Context, path, field, filename string, src
 					return werr
 				}
 			}
-			part, werr := mw.CreateFormFile(field, filename)
-			if werr != nil {
-				return werr
-			}
-			if _, cerr := io.Copy(part, src); cerr != nil {
-				return cerr
+			for _, p := range parts {
+				part, werr := mw.CreateFormFile(p.Field, p.Filename)
+				if werr != nil {
+					return werr
+				}
+				if _, cerr := io.Copy(part, p.Reader); cerr != nil {
+					return cerr
+				}
 			}
 			return mw.Close()
 		}()
 		_ = pw.CloseWithError(err)
 	}()
 
-	req, err := c.newRequest(ctx, http.MethodPost, path, nil, nil, acceptJSON)
+	req, err := c.newRequest(ctx, http.MethodPost, path, query, nil, acceptJSON)
 	if err != nil {
 		return nil, err
 	}

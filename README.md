@@ -97,6 +97,11 @@ _ = admin.DoJSON(ctx, http.MethodGet, "/api/some/new/endpoint", nil, &out)
   [docs/api-tokens.md](https://github.com/ithtelab/workbuddy-manager/blob/main/docs/api-tokens.md)）。
   用会话（`WithAdminLogin`）建令牌，再用 `WithAdminToken` 全程 headless 调用即可。
 
+> **少数接口只认会话**：`POST /api/system/update`（会重启服务）、
+> `GET /api/accounts/export`（批量导出带凭据的账号文件）由服务端强制
+> `require_session_admin`，用 `wbt_` 调会得到 403（"该接口不接受 API Token"）。
+> 这些操作请用 `WithAdminLogin` 建立的会话客户端。
+
 自定义可自行实现 `AdminAuth` / `GatewayKey` 接口，通过 `WithAdminAuth` /
 `WithGatewayKey` 注入。
 
@@ -170,19 +175,20 @@ c := wbsdk.NewClient(base,
 | `Messages` / `MessagesStream` | Anthropic Messages 协议透传 |
 | `Models` | 当前密钥可见的模型列表（已按版本与白名单裁剪） |
 | `Usage` | 当前密钥的用量与额度（`tokens` / `credits`，不限额度为 `null`） |
+| `MessagesCountTokens` / `CountTokens` | Anthropic 的 token **估算**（`/v1/messages/count_tokens`，走完整鉴权；估算口径偏高） |
 
 ### 管理面（`/api/*`）
 
 | 服务 | 方法 |
 |---|---|
-| `Accounts()` | `List` `StartAuth` `PollAuth` `Checkin` `CheckinAll` `Credits` `RefreshCredits` `SetDisabled` `SetNote` `SetProxy` `SetWeight` `ForceCooling` `Move` `Test` `Refresh` `ClearCooling` `Delete` `CheckinLogs` `ClearCheckinLogs` `TaskLogs` `CollectTaskLogs` `ClearTaskLogs` `UpstreamLogs` `Restart` |
-| `Keys()` | `List` `Create` `Update` `Delete` `ResetUsage` `CheckModels` |
+| `Accounts()` | `List` `StartAuth` `PollAuth` `Checkin` `CheckinAll` `Credits` `RefreshCredits` `SetDisabled` `SetNote` `SetProxy` `SetWeight` `ForceCooling` `Move` `Test` `Refresh` `ClearCooling` `Delete` `CheckinLogs` `ClearCheckinLogs` `TaskLogs` `CollectTaskLogs` `ClearTaskLogs` `UpstreamLogs` `Restart` `Export`（仅会话）`Upload` `AdminAPIStatus` `CreditsSnapshot` `ProbeModels` `RefreshTokens` `RefreshPlan` `SaveRefreshPlan` `RunRefreshPlan` `ClaimCompensation` `DailyPlan` `SaveDailyPlan` `RunDailyTask` |
+| `Keys()` | `List` `Create` `Update` `Delete` `ResetUsage` `CheckModels` `Export` `LocalImportStatus` `DetectLocalClient` `ImportLocal` |
 | `Stats()` | `Summary` `Daily` `Hourly` `CreditsFlow` `ByModel` `ByKey` `Upstream` `RepairUsage` `RebuildUsage` |
 | `Logs()` | `List` `Clear` |
 | `Security()` | `Config` `SaveConfig` `Rules` `AddRule` `RemoveRule` `Logs` `ClearLogs` |
 | `Settings()` | `Upstream` `SaveUpstream` `TestUpstash` `ReloadState` `ReloadUpstream` `ModelMap` `SaveModelMap` `GitHubToken` `SaveGitHubToken` `GitHubMirror` `SaveGitHubMirror` |
 | `Users()` | `List` `Add` `Update` `Remove` `AuditLogs` |
-| `System()` | `Sysinfo` `UpdateStatus` `CheckUpdate` `Versions` `Changelog` `Update` `SetUpstreamRef` `Package` `UploadPackage` `UploadPackageFile` `DeletePackage` |
+| `System()` | `Sysinfo` `UpdateStatus` `CheckUpdate` `Versions` `Changelog` `Update` `UpdateFrom`（可选在线 / 离线包）`SetUpstreamRef`（**已废弃**，v2.10 起 404）`Package` `UploadPackage` `UploadPackageFile` `DeletePackage` |
 | `Tasks()` | `RunStatus` `RunStart` `RunStop` `ClaimSchedule` `SaveClaimSchedule` |
 | `Upstream()` | `Status` `Models`（**上游运行时**状态与模型简表） |
 | `Upstreams()` | `List` `Create` `Update` `Delete` `Probe`（**本端接了几个上游**，即账号池分组） |
