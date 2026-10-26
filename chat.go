@@ -170,6 +170,40 @@ func (c *Client) MessagesStream(ctx context.Context, payload []byte, fn func(raw
 	return c.DoStream(ctx, http.MethodPost, "/v1/messages", payload, fn)
 }
 
+// MessagesCountTokens 透传一次 Anthropic 的 token 估算请求
+// （POST /v1/messages/count_tokens，原始 payload → 原始响应）。
+//
+// 服务端只读 model / system / messages[].content / tools 四处文本，其它字段
+// 一律不看；也**允许不带 model**（那是常态）。鉴权与 /v1/messages 同一条路径：
+// 停用/过期/配额/IP 白名单/限流都会生效，不是"能解析就放行"。
+func (c *Client) MessagesCountTokens(ctx context.Context, payload []byte) (*RawResponse, error) {
+	return c.doRawAccept(ctx, http.MethodPost, "/v1/messages/count_tokens", nil, payload, acceptJSON)
+}
+
+// CountTokens 用建模的请求体做一次 token 估算。
+//
+// 返回的是**估算值**而非上游分词器的结果：CJK 约 1 字符 1 token、其余约 4 字符
+// 1 token，每个 block 再加 4 的结构开销，口径刻意偏高。客户端据此留余量即可，
+// 不要把它当账单口径。
+func (c *Client) CountTokens(ctx context.Context, req CountTokensRequest) (*CountTokensResult, error) {
+	payload, err := json.Marshal(&req)
+	if err != nil {
+		return nil, err
+	}
+	res, err := c.MessagesCountTokens(ctx, payload)
+	if err != nil {
+		return nil, err
+	}
+	if !res.OK() {
+		return nil, res.Err()
+	}
+	var out CountTokensResult
+	if err := res.Decode(&out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // ModelInfo 是模型清单里的一条。
 type ModelInfo struct {
 	ID      string `json:"id"`

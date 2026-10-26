@@ -2,6 +2,7 @@ package wbsdk
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -23,6 +24,12 @@ const (
 	UpdateTargetManager  = "manager"
 	UpdateTargetUpstream = "upstream"
 	UpdateTargetBoth     = "both"
+)
+
+// 更新包来源枚举（v2.10 新增：离线升级包与在线发布走同一条更新流程）。
+const (
+	UpdateSourceRelease  = "release"  // GitHub 最新发布（默认）
+	UpdateSourceUploaded = "uploaded" // 面板里已上传的离线升级包
 )
 
 // Sysinfo 返回服务信息（版本、上游地址等）。需要登录。
@@ -72,17 +79,44 @@ func (s *SystemService) Changelog(ctx context.Context) (*Changelog, error) {
 	return &out, nil
 }
 
-// Update 启动一键更新。target 取 UpdateTargetManager / UpdateTargetUpstream / UpdateTargetBoth。
+// Update 启动一键更新。target 取 UpdateTarget* 之一，包固定从 GitHub 最新发布取。
+//
+// 更新在后台执行、可能重启本服务，所以立即返回（409 = 当前不允许更新，原因在
+// APIError.Message 里）。要用面板里**已上传的离线升级包**，改用 UpdateFrom。
 func (s *SystemService) Update(ctx context.Context, target string) (*ActionResult, error) {
-	body := map[string]string{"target": target}
+	return s.UpdateFrom(ctx, UpdateIn{Target: target})
+}
+
+// UpdateIn 是 POST /api/system/update 的请求体。
+type UpdateIn struct {
+	// Target 取 UpdateTargetManager / UpdateTargetUpstream / UpdateTargetBoth。
+	Target string `json:"target"`
+	// Source 取 UpdateSourceRelease（默认）或 UpdateSourceUploaded（离线升级包）。
+	// 留空时服务端按 release 处理。
+	Source string `json:"source,omitempty"`
+}
+
+// UpdateFrom 启动一键更新，可指定包来源（在线发布 / 已上传的离线包）。
+//
+// 仅会话管理员可调：更新会重启本服务，服务端不接受 API Token 触发它
+// （`wbt_` 会得到 403）。
+func (s *SystemService) UpdateFrom(ctx context.Context, in UpdateIn) (*ActionResult, error) {
+	if in.Target == "" {
+		return nil, errors.New("wbsdk: UpdateFrom 需要 target")
+	}
 	var out ActionResult
-	if _, err := s.c.doJSON(ctx, http.MethodPost, "/api/system/update", nil, body, &out); err != nil {
+	if _, err := s.c.doJSON(ctx, http.MethodPost, "/api/system/update", nil, in, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
 }
 
 // SetUpstreamRef 固定上游版本（ref 为空串表示取消固定、恢复跟随分支）。
+//
+// Deprecated: 管理端 v2.10 起**上游随管理端一起发布**，不再有独立的上游仓库与
+// 版本（`POST /api/system/upstream-ref` 已移除），这个方法在 v2.10+ 上会 404。
+// 更新上游请用 Update / UpdateFrom 的 Target=UpdateTargetUpstream。
+// 保留它只为兼容还在 v2.9 及更早版本的管理端。
 func (s *SystemService) SetUpstreamRef(ctx context.Context, ref string) (map[string]any, error) {
 	body := map[string]string{"ref": ref}
 	var out map[string]any

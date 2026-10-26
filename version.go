@@ -4,8 +4,8 @@ package wbsdk
 //
 // 发行构建可用 -ldflags 覆盖，避免「发版了但代码里还写着旧版本」：
 //
-//	go build -ldflags "-X github.com/sanguine886/workbuddy-sdk.version=v0.2.0"
-var version = "0.2.0"
+//	go build -ldflags "-X github.com/sanguine886/workbuddy-sdk.version=v0.3.0"
+var version = "0.3.0"
 
 // Version 返回本库的版本号。
 func Version() string { return version }

@@ -3,11 +3,60 @@
 本文件记录 workbuddy-sdk 的版本变更。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.3.0] - 2026-10-20
+
+对齐 workbuddy-manager **v2.10.2**：149 个端点里 147 个有具名方法，剩下两个是
+**别名路径**（`/v2/chat/completions`、`/responses`），用 `Do` / `DoStream` 直达。
+`scripts/audit_endpoints.py` 的退出码为 0 —— 而且这次是**真 0**：审计脚本的匹配
+规则被修正了（见下），此前它把嵌套路径误判成已覆盖。
+
+### 新增
+
+- **账号批量操作**（`Accounts()`）：`Export`（把带凭据的账号文件打成 zip 下载，
+  仅**会话管理员**；返回原始响应，Body 即 zip 字节）、`Upload`（多文件流式
+  multipart，重复导入默认**拒绝**，除非 `overwrite=true`）、`AdminAPIStatus`
+  （上游 admin.enabled 三态：`nil` = 非默认分组读不到）、`CreditsSnapshot`
+  （**只读本地面板记录**的积分快照，带 `known` 区分账号是否还在）、
+  `ProbeModels`（账号 × 模型主动探测，分类 ok/rate/credit/auth/no_model/error）、
+  `RefreshTokens`（一键全量续期，末尾只重载一次上游）。
+- **计划任务**（`Accounts()`）：`RefreshPlan` / `SaveRefreshPlan` /
+  `RunRefreshPlan`（每 N 天全量刷令牌；保存时三项必填），
+  `DailyPlan` / `SaveDailyPlan` / `RunDailyTask`（签到 / 领补偿 / 领奖 / 做任务），
+  以及 `ClaimCompensation`（领活动补偿，已领过的直接跳过）。
+- **密钥导出与本机导入**（`Keys()`）：`Export`（cc-switch / ZCode 配置片段，
+  只读无副作用）、`LocalImportStatus`、`DetectLocalClient`、
+  `ImportLocal`（深链优先 / 直接写配置；仅面板跑在本机时可用，返回体不回显密钥）。
+- **`MessagesCountTokens` / `CountTokens`**：Anthropic 的 token **估算**端
+  （`POST /v1/messages/count_tokens`，走网关密钥的完整鉴权）。
+- **`System().UpdateFrom`** 与 `UpdateIn` / `UpdateSource*` 常量：一键更新可选
+  `source=release|uploaded`（v2.10 起离线升级包与在线发布走同一条流程）。
+
+### 变更
+
+- `System().SetUpstreamRef` 标记 **Deprecated**：v2.10 起上游随管理端发布，
+  `/api/system/upstream-ref` 已移除，调用会 404；保留只为兼容 ≤ v2.9 的服务端。
+- `scripts/audit_endpoints.py` 第三次修匹配规则：无参数端点要求**整条路径**字面量，
+  参数在中间时要求**参数之后的静态段**也有字面量。旧规则只要 SDK 里有
+  `/api/accounts` 就认为 `/api/accounts/export`、`/api/accounts/refresh-plan/run`
+  都覆盖了 —— v0.2.0 说的「146/148 具名」因此是**高估**，实际有 17 个端点
+  （后面这些批量/计划端点）没有具名方法，本版补齐。
+
+### 说明
+
+- 上传类接口（`Upload` / `UploadPackage`）**不参与重试、不做 401 自动重登**：
+  请求体是流式的，重发要调用方重新打开文件。
+- `Accounts().Export` 与 `System().Update*` 只接受**会话登录**，API Token（`wbt_`）
+  会拿到 403；`Upload` 等其余管理端接口用 `wbt_` 即可。
+
 ## [0.2.0] - 2026-10-20
 
 对齐 workbuddy-manager **v2.7.0**：148 个端点里 146 个有具名方法，剩下两个是
 **别名路径**（`/v2/chat/completions`、`/responses`），用 `Do` / `DoStream` 直达。
 `scripts/audit_endpoints.py` 的退出码为 0。
+
+> 勘误（0.3.0 补记）：当时的「146/148」是审计脚本**匹配规则过松**造成的误报，
+> 实际漏了 17 个更深的端点（账号批量 / 计划任务 / 本机导入 / count_tokens）。
+> 脚本已在 0.3.0 修正。
 
 ### 新增
 

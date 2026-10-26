@@ -215,3 +215,55 @@ func ExampleClient_Proxies() {
 	fmt.Printf("%s 绑定 %d 台\n", res.Name, res.Updated)
 	// Output: hk1 绑定 2 台
 }
+
+// 数据面：让网关**估算**一段对话的输入 token（拿不到上游分词器，口径偏高）。
+func ExampleClient_CountTokens() {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"input_tokens": 23}`)
+	}))
+	defer srv.Close()
+
+	c := wbsdk.NewClient(srv.URL, wbsdk.WithGatewayKey("wbk_xxx"))
+	got, err := c.CountTokens(context.Background(), wbsdk.CountTokensRequest{
+		Model:    "glm-5.2",
+		Messages: []any{map[string]any{"role": "user", "content": "你好"}},
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(got.InputTokens)
+	// Output: 23
+}
+
+// 管理面：一键全量续期，再读「每 N 天刷一次」的计划。
+func ExampleClient_Accounts_batch() {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/accounts/refresh-tokens":
+			_, _ = io.WriteString(w, `{"total":2,"succeeded":2,"failed":[],"results":[
+				{"file":"a.json","nickname":"老王","uid":"u1","ok":true,"message":"ok"},
+				{"file":"b.json","nickname":"小李","uid":"u2","ok":true,"message":"ok"}
+			],"reload_triggered":true,"reload_error":""}`)
+		case "/api/accounts/refresh-plan":
+			_, _ = io.WriteString(w, `{"enabled":true,"interval_days":5,"hour":3,"last_run":0,"next_run":1727200000}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	c := wbsdk.NewClient(srv.URL, wbsdk.WithAdminToken("wbt_xxx"))
+	res, err := c.Accounts().RefreshTokens(context.Background(), nil)
+	if err != nil {
+		log.Fatal(err)
+	}
+	plan, err := c.Accounts().RefreshPlan(context.Background())
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("%d/%d 续期成功；计划每 %d 天 %d 点\n",
+		res.Succeeded, res.Total, plan.IntervalDays, plan.Hour)
+	// Output: 2/2 续期成功；计划每 5 天 3 点
+}

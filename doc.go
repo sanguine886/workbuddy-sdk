@@ -6,15 +6,20 @@
 //
 //   - 数据面（Data Plane）：/v1/*、/v2/chat/completions、/responses、
 //     /v1/messages。鉴权用网关密钥（Authorization: Bearer wbk_...）。
-//     Chat / ChatStream / Responses / Messages / Models / Usage。
+//     Chat / ChatStream / Responses / Messages / MessagesCountTokens / Models /
+//     Usage。
 //   - 管理面（Control Plane）：/api/*。鉴权用 HMAC 签名会话 Cookie（wb_session）
 //     或管理面 API Token（wbt_）。Accounts / Keys / Stats / Logs / Security /
 //     Settings / Users / System / Tasks / Upstream / Upstreams / Proxies /
 //     PGSync / RedPackets / Catalog / Playground，以及会话方法 Me / Logout /
 //     RevokeSessions。
 //
-// 例外：红包抽奖端（/api/claim/*）由服务端刻意公开（收到分享链接的人本来就没有
-// 账号），本库对它**不注入任何凭据**，也不要求配置凭据。
+// 例外一：红包抽奖端（/api/claim/*）由服务端刻意公开（收到分享链接的人本来就
+// 没有账号），本库对它**不注入任何凭据**，也不要求配置凭据。
+//
+// 例外二：少数管理端接口服务端只接受**会话登录**（require_session_admin）——
+// 一键更新（会重启服务）与批量导出账号（带凭据的 zip），API Token 会得到 403。
+// 调用它们请用 WithAdminLogin 建客户端。
 //
 // # 边界
 //
