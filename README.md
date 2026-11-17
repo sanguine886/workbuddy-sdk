@@ -81,9 +81,15 @@ _ = admin.DoJSON(ctx, http.MethodGet, "/api/some/new/endpoint", nil, &out)
 |---|---|---|
 | 管理面 | `/api` | HMAC 签名会话 Cookie（`wb_session`）或管理面 API Token（`wbt_`） |
 | 数据面 | `/v1`、`/v2`、`/responses` | 网关密钥（`Authorization: Bearer wbk_...`） |
-| 公开 | `/healthz`、`/api/healthz`、`/api/claim/*` | 无（红包抽奖端刻意公开，收链接的人本来就没账号） |
+| 公开 | `/healthz`、`/api/healthz`、`/api/status`、`/api/claim/*` | 无（红包抽奖端刻意公开，收链接的人本来就没账号；`/api/status` 只声明余额单位，不含额度） |
 
-鉴权按路径前缀自动选择。管理面提供四种方式：
+鉴权按路径前缀自动选择。**两个例外**：
+
+- `/api/usage/token/`（余额端点）挂在 `/api` 前缀下，但鉴权用的是**网关密钥**
+  （`wbk_`）——服务端直接读 `Authorization` 头，不认会话 Cookie。
+- `/api/status`（余额单位元数据）**公开无鉴权**。
+
+管理面提供四种方式：
 
 - **`WithAdminLogin(user, pass)`** —— 推荐。自动 `POST {baseURL}/api/login`、缓存会话
   Cookie，收到 401 时失效并**重登一次**。登录是单飞的（并发 401 只触发一次），
@@ -104,6 +110,58 @@ _ = admin.DoJSON(ctx, http.MethodGet, "/api/some/new/endpoint", nil, &out)
 
 自定义可自行实现 `AdminAuth` / `GatewayKey` 接口，通过 `WithAdminAuth` /
 `WithGatewayKey` 注入。
+
+### 多分组（`WithUpstreamID`）
+
+上游支持多分组（每组装一个独立的 workbuddy2api 实例、各有自己的账号目录）。
+**账号级接口几乎全部接受 `upstream_id`，不传就是操作默认分组。**
+
+```go
+c := wbsdk.NewClient(base, wbsdk.WithAdminLogin("admin", "***"),
+	wbsdk.WithUpstreamID(5)) // 之后所有账号级调用都作用于分组 5
+
+c.Accounts().Checkin(ctx, "workbuddy123.json") // 自动带上 ?upstream_id=5
+c.Accounts().Order(ctx, wbsdk.Ptr(9))          // 显式传的覆盖默认值
+c.SetUpstreamID(0)                             // 取消，回到默认分组
+
+// 发码 + 轮询：两者要带**同一个**分组（落盘发生在轮询那一步）
+st, _ := c.Accounts().StartAuthIn(ctx, wbsdk.AuthStartIn{Realm: wbsdk.RealmGlobal, Region: "HK"})
+p, _ := c.Accounts().PollAuthIn(ctx, wbsdk.AuthPollIn{State: st.State, Realm: wbsdk.RealmAny})
+```
+
+> 发码的 `Realm` 与轮询的 `Realm` 语义**不同**：前者决定打哪一版端点（必须给
+> 确定值，`RealmAny` 用客户端默认），后者是**一致性校验**——服务端拿它与发码
+> 时登记的版本比，不一致就回 `realm_mismatch` 且不落盘。所以轮询传 `RealmAny`
+> 才是「按登记的那个来」，固定写 `RealmCN` 会让国际版的码一直失败。
+
+单分组部署不用管它。为什么要显式设：错分组的症状极其误导——按文件名清冷却时，
+服务端会去默认分组的目录里找那个文件，找不到就回 **404「账号文件不存在」**，
+看起来像账号被删了。数据面（`/v1/*`）不受影响：那边用哪个上游由密钥决定。
+
+### 局部更新：`nil` 与零值的区别
+
+有些配置接口是**局部合并**（以服务端当前值为底）：监控 `SaveConfig`、抓包
+`SaveConfig`、网关 CORS `SaveGatewayCORS`。它们的字段都是指针，语义固定：
+
+| 写法 | 含义 |
+|---|---|
+| `nil` | **不改**这一项 |
+| `wbsdk.Ptr("")` | 真的把它改成空串（例如清空已存的邮箱地址） |
+| `wbsdk.Ptr(false)` | 真的关掉它 |
+| `wbsdk.Ptr([]string{})` | 真的清空这个列表（例如清空收件人） |
+
+```go
+// 只关掉邮件通知，其余不动
+patch := wbsdk.WatchdogConfigPatch{Mail: &wbsdk.WatchdogMailPatch{Enabled: wbsdk.Ptr(false)}}
+// 清空已保存的 SMTP 密码
+patch = wbsdk.WatchdogConfigPatch{Mail: &wbsdk.WatchdogMailPatch{Password: wbsdk.Ptr("")}}
+// 清空收件人（值切片写不出这个动作：omitempty 会把 [] 吃掉）
+patch = wbsdk.WatchdogConfigPatch{Mail: &wbsdk.WatchdogMailPatch{To: wbsdk.Ptr([]string{})}}
+```
+
+**例外：`Settings().SaveAutoUpdate` 是整体替换**（`AutoUpdateConfig` 用值类型），
+`interval_hours` / `window_start` / `window_end` 缺一个就 400。正确用法是先
+`AutoUpdate()` 读出来、改想要的字段、再整个传回去。
 
 ## 错误处理
 
@@ -175,22 +233,29 @@ c := wbsdk.NewClient(base,
 | `Messages` / `MessagesStream` | Anthropic Messages 协议透传 |
 | `Models` | 当前密钥可见的模型列表（已按版本与白名单裁剪） |
 | `Usage` | 当前密钥的用量与额度（`tokens` / `credits`，不限额度为 `null`） |
+| `TokenUsage` / `TokenUsageOf` | 当前密钥的剩余额度（`/api/usage/token/`，**用网关密钥鉴权**）；`*Of` 版可指定报哪个池（`ScopeCN` / `ScopeGlobal` / `ScopeMerged`） |
+| `Credits` / `CreditsOf` | 客户端默认余额路径（`/v1/credits`，RikkaHub / new-api 两种口径）；`*Of` 版同上 |
+| `BalanceStatus` | 余额的**公开**单位元数据（`/api/status`，无鉴权） |
+| `ToolsSearch` | 上游 web 搜索（`POST /v1/tools/search`，信封原样透传） |
 | `MessagesCountTokens` / `CountTokens` | Anthropic 的 token **估算**（`/v1/messages/count_tokens`，走完整鉴权；估算口径偏高） |
 
 ### 管理面（`/api/*`）
 
 | 服务 | 方法 |
 |---|---|
-| `Accounts()` | `List` `StartAuth` `PollAuth` `Checkin` `CheckinAll` `Credits` `RefreshCredits` `SetDisabled` `SetNote` `SetProxy` `SetWeight` `ForceCooling` `Move` `Test` `Refresh` `ClearCooling` `Delete` `CheckinLogs` `ClearCheckinLogs` `TaskLogs` `CollectTaskLogs` `ClearTaskLogs` `UpstreamLogs` `Restart` `Export`（仅会话）`Upload` `AdminAPIStatus` `CreditsSnapshot` `ProbeModels` `RefreshTokens` `RefreshPlan` `SaveRefreshPlan` `RunRefreshPlan` `ClaimCompensation` `DailyPlan` `SaveDailyPlan` `RunDailyTask` |
-| `Keys()` | `List` `Create` `Update` `Delete` `ResetUsage` `CheckModels` `Export` `LocalImportStatus` `DetectLocalClient` `ImportLocal` |
-| `Stats()` | `Summary` `Daily` `Hourly` `CreditsFlow` `ByModel` `ByKey` `Upstream` `RepairUsage` `RebuildUsage` |
-| `Logs()` | `List` `Clear` |
+| `Accounts()` | `List` `StartAuth` `StartAuthIn`（含地区 / 分组 / 线路）`StartAuthFor`（定向重登）`PollAuth` `PollAuthIn` `Checkin` `CheckinAll` `Credits` `RefreshCredits` `RefreshCredit` `SetDisabled` `SetNote` `SetProxy` `SetWeight` `ForceCooling` `Move` `Test` `Refresh` `ClearCooling` `ClearCoolingDetail` `Delete` `CheckinLogs` `ClearCheckinLogs` `TaskLogs` `CollectTaskLogs` `ClearTaskLogs` `UpstreamLogs` `Restart` `Export`（仅会话）`Upload` `AdminAPIStatus` `CreditsSnapshot` `CreditsSnapshotInactive` `ProbeModels` `RefreshTokens` `RefreshPlan` `SaveRefreshPlan` `RunRefreshPlan` `ClaimCompensation` `DailyPlan` `SaveDailyPlan` `RunDailyTask` `Order` `SaveOrder` `TaskScheduler` `KeepTaskScheduler` |
+| `AccountRisk()` | `List` `Acknowledge` `Resume`（账号风险预警；`Resume` 解不掉时服务端回 409） |
+| `Keys()` | `List` `Create` `Update` `Delete` `ResetUsage` `CheckModels` `Export` `LocalImportStatus` `DetectLocalClient` `ImportLocal` `Reveal`（取回明文） |
+| `Stats()` | `Summary` `Daily` `Hourly` `CreditsFlow` `ByModel` `ByKey` `Upstream` `RepairUsage` `RebuildUsage` `ByAccount` `ByAccountModel`，以及带自定义日期区间的 `DailyRange` `CreditsFlowRange` `ByModelRange` `ByKeyRange` |
+| `Logs()` | `List` `Clear` `AccountBackfill`（账号列为何是空的） |
 | `Security()` | `Config` `SaveConfig` `Rules` `AddRule` `RemoveRule` `Logs` `ClearLogs` |
-| `Settings()` | `Upstream` `SaveUpstream` `TestUpstash` `ReloadState` `ReloadUpstream` `ModelMap` `SaveModelMap` `GitHubToken` `SaveGitHubToken` `GitHubMirror` `SaveGitHubMirror` |
+| `Settings()` | `Upstream` `SaveUpstream` `TestUpstash` `ReloadState` `ReloadUpstream` `ModelMap` `SaveModelMap` `GitHubToken` `SaveGitHubToken` `GitHubMirror` `SaveGitHubMirror` `Pricing` `SavePricing` `GatewayCORS` `SaveGatewayCORS` `AutoUpdate` `SaveAutoUpdate` |
+| `Tap()` | `Config` `SaveConfig` `Backfill` `Prune` `Sessions` `Session` `DeleteSession` `Turn` `Diff` `ExportSession` `Clear`（**抓包**：库里存完整对话内容，服务端要求管理员） |
+| `Watchdog()` | `Config` `SaveConfig` `Status` `Run` `ResetBaseline` `CheckMailEgress` `TestMail` `QQBots` `TestQQ` `TestLLM`（上游网页改版监控） |
 | `Users()` | `List` `Add` `Update` `Remove` `AuditLogs` |
 | `System()` | `Sysinfo` `UpdateStatus` `CheckUpdate` `Versions` `Changelog` `Update` `UpdateFrom`（可选在线 / 离线包）`SetUpstreamRef`（**已废弃**，v2.10 起 404）`Package` `UploadPackage` `UploadPackageFile` `DeletePackage` |
 | `Tasks()` | `RunStatus` `RunStart` `RunStop` `ClaimSchedule` `SaveClaimSchedule` |
-| `Upstream()` | `Status` `Models`（**上游运行时**状态与模型简表） |
+| `Upstream()` | `Status` `StatusOf` `Models`（**上游运行时**状态与模型简表） |
 | `Upstreams()` | `List` `Create` `Update` `Delete` `Probe`（**本端接了几个上游**，即账号池分组） |
 | `Proxies()` | `Routes` `CreateRoute` `UpdateRoute` `DeleteRoute` `ImportRoutes` `ProbeRoute` `Bindings` `BindAccounts` `AutoAssign` `AccountRoutes` `SavePool` `Settings` `SaveSettings` `ProbeSettings` |
 | `PGSync()` | `Get` `Save` `Test` `Export` `Import` `Status`（PostgreSQL 异地备份） |
@@ -203,6 +268,19 @@ c := wbsdk.NewClient(base,
 
 > 两个别名路径（网关同时注册的 `/v2/chat/completions`、以及 baseURL 不含 `/v1`
 > 时的 `/responses`）未做成具名方法，需要时用 `Do` / `DoStream` 直接调用即可。
+
+### 错误归一化
+
+非 2xx 一律归一化成 `*APIError`（`StatusCode` / `Code` / `Message` / `Hint` /
+`Raw` / **`RetryAfter`**）。`RetryAfter` 是 `Retry-After` 头换算出的秒数（0 =
+没有该头）：429 会带它，据此退避比固定间隔准。401 / 403 / 404 / 429 另有
+`AuthError` / `PermissionError` / `NotFoundError` / `QuotaError` 包装，
+用 `errors.As` 或 `errors.Is(wbsdk.ErrNotFound)` 都能取到。
+
+> **v2.11 的路径迁移**：上游运行时状态从 `/api/status` 搬到了
+> `/api/upstream/status`——旧地址让给了客户端余额协议的公开元数据端点。
+> `Upstream().Status` 已改打新路径（继续用旧路径会解出一片零值而不报错），
+> 按分组取用 `Upstream().StatusOf(ctx, upstreamID)`。
 
 示例：
 
@@ -252,7 +330,11 @@ gofmt -l -w .     # 格式化
 
 ```sh
 python scripts/audit_endpoints.py /path/to/workbuddy-manager
+# 按发布版本核对，不需要切换上游工作区：
+python scripts/audit_endpoints.py /path/to/workbuddy-manager --ref v2.11.17
 # 退出码 0 = 覆盖齐（或只剩已声明的别名路径）；1 = 出现未声明的未覆盖端点
+
+python -m unittest discover -s scripts -p 'test_*.py'
 ```
 
 版本号只有一个来源（[`version.go`](version.go)）。发行构建可用 ldflags 覆盖，

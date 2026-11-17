@@ -15,6 +15,7 @@ type options struct {
 	adminToken   string
 	key          GatewayKey
 	realm        Realm
+	upstreamID   *int
 	retry        *RetryPolicy
 	sseEventMode bool
 	userAgent    string
@@ -113,6 +114,17 @@ func WithGatewayKey(key string) Option {
 // WithRealm 设置默认版本（cn / global）；数据面与管理面按需覆盖。
 func WithRealm(r Realm) Option {
 	return func(o *options) { o.realm = r }
+}
+
+// WithUpstreamID 设置默认分组；未显式传 upstreamID 的账号级调用都用它。
+//
+// 单分组部署（绝大多数）不用管它。**多分组部署必须设**：上游几乎每个账号级
+// 端点都接受 `upstream_id`，不传就是操作默认分组，而错分组的症状常常是
+// 「账号文件不存在」这种完全指错方向的报错。
+//
+// 数据面（/v1/*）不受影响：那边用哪个上游由密钥决定，不看这个值。
+func WithUpstreamID(id int) Option {
+	return func(o *options) { o.upstreamID = &id }
 }
 
 // WithRetry 开启对**幂等请求**（GET / HEAD / OPTIONS）的自动重试。

@@ -27,9 +27,12 @@ type CreditsSnapshotAccount struct {
 	UID          string  `json:"uid"`
 	Credits      float64 `json:"credits"`       // 登记时刻的余额，不是实时值
 	RegisteredAt int64   `json:"registered_at"` // 登记时刻（epoch 秒）
-	// Known 表示这个 uid 现在**还**对应本机的一个账号。账号删掉后历史快照仍在，
-	// 对账脚本可据 known=false 把它排除，或反过来当作"曾经存在"的凭据。
+	// Known 表示这个 uid 还对应本机的一个账号。v2.11 起返回的每一行都是 true
+	// ——已删账号的登记不再下发（去重口径见 TotalRegistered）。
 	Known bool `json:"known"`
+	// Active 表示这个账号现在**还能被调度**（未停用、令牌没过期）。
+	// 只有用 CreditsSnapshotInactive 才会看到 Active=false 的行。
+	Active bool `json:"active"`
 }
 
 // CreditsSnapshot 是 GET /api/accounts/credits-snapshot 的返回。
@@ -37,10 +40,14 @@ type CreditsSnapshotAccount struct {
 // **只读本地记录，不触发任何上游查询**：数字是面板上次记下来的，可能是几小时前
 // 的。要实时余额请用 Accounts.RefreshCredits（那会真的打腾讯接口，且要管理员）。
 type CreditsSnapshot struct {
-	SnapshotAt int64                    `json:"snapshot_at"` // 最新一条的登记时刻
-	Count      int                      `json:"count"`
-	KnownCount int                      `json:"known_count"`
-	Accounts   []CreditsSnapshotAccount `json:"accounts"`
+	SnapshotAt int64 `json:"snapshot_at"` // 最新一条的登记时刻
+	Count      int   `json:"count"`
+	KnownCount int   `json:"known_count"`
+	// ActiveCount 是其中还能被调度的账号数。
+	ActiveCount int `json:"active_count"`
+	// TotalRegistered 是登记表里的总行数（含已删除账号的残留），用于对账。
+	TotalRegistered int                      `json:"total_registered"`
+	Accounts        []CreditsSnapshotAccount `json:"accounts"`
 }
 
 // AccountUploadFile 是批量导入时的一个待上传文件。
@@ -84,8 +91,8 @@ type AccountUploadResult struct {
 
 // ProbeModelsIn 是 POST /api/accounts/probe-models 的请求体。
 //
-// Accounts 传账号文件名；Models 传模型名。服务端限制：账号 ≤ 10、模型 ≤ 30、
-// 组合 ≤ 60（超了 400）。同账号内串行且每条间隔 600ms，不同账号最多 4 路并发，
+// Accounts 传账号文件名；Models 传模型名。服务端限制：**账号 ≤ 20、模型 ≤ 10、
+// 组合 ≤ 60**（超了 400）。同账号内串行且每条间隔 600ms，不同账号最多 4 路并发，
 // 因此这个调用**可能耗时数十秒**，ctx 超时要留够。
 type ProbeModelsIn struct {
 	Accounts []string `json:"accounts"`
@@ -105,6 +112,14 @@ type ProbeModelRow struct {
 	Code      *int   `json:"code"` // 上游业务码；null = 没拿到
 	Message   string `json:"message"`
 	LatencyMS int    `json:"latency_ms"`
+
+	// 下面三个是「探测结果同步给上游网关」的情况（v2.11 新增）：
+	// 探测出某个模型不可用之后，面板会把这个结论写进上游，免得别的请求再撞。
+	// GatewaySynced 为 true 表示同步成功；GatewaySyncSkipped 为 true 表示
+	// 无需同步（例如探测本来就成功）；Message 是失败原因。
+	GatewaySynced      *bool  `json:"gateway_synced,omitempty"`
+	GatewaySyncSkipped *bool  `json:"gateway_sync_skipped,omitempty"`
+	GatewaySyncMessage string `json:"gateway_sync_message,omitempty"`
 }
 
 // ProbeModelsSummary 是按 Status 分类的计数。

@@ -35,7 +35,7 @@ func groupQuery(upstreamID *int) url.Values {
 // Routes 读取线路列表（凭据已脱敏）+ 池配置一览。
 func (s *ProxyService) Routes(ctx context.Context, upstreamID *int) (*ProxyRouteList, error) {
 	var out ProxyRouteList
-	if _, err := s.c.doJSON(ctx, http.MethodGet, "/api/proxy-routes", groupQuery(upstreamID), nil, &out); err != nil {
+	if _, err := s.c.doJSON(ctx, http.MethodGet, "/api/proxy-routes", s.c.groupQ(upstreamID), nil, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -57,7 +57,7 @@ func (s *ProxyService) CreateRoute(ctx context.Context, in ProxyRouteIn) (*Proxy
 func (s *ProxyService) UpdateRoute(ctx context.Context, name string, patch ProxyRoutePatch, upstreamID *int) (*ProxyRoute, error) {
 	var out ProxyRoute
 	path := proxyRoutePath(name)
-	if _, err := s.c.doJSON(ctx, http.MethodPut, path, groupQuery(upstreamID), patch, &out); err != nil {
+	if _, err := s.c.doJSON(ctx, http.MethodPut, path, s.c.groupQ(upstreamID), patch, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -66,7 +66,7 @@ func (s *ProxyService) UpdateRoute(ctx context.Context, name string, patch Proxy
 // DeleteRoute 删除线路。force=false 时若仍有账号绑着，服务端回 409
 // （删掉会让那些账号的出口悄悄换掉）。
 func (s *ProxyService) DeleteRoute(ctx context.Context, name string, force bool, upstreamID *int) (*ProxyDeleteResult, error) {
-	q := groupQuery(upstreamID)
+	q := s.c.groupQ(upstreamID)
 	if force {
 		q.Set("force", "true")
 	}
@@ -101,7 +101,7 @@ func (s *ProxyService) ProbeRoute(ctx context.Context, name string) (*ProxyProbe
 // Bindings 读取「全部账号 → 各自绑定的线路」（空 = 跟随池策略）。
 func (s *ProxyService) Bindings(ctx context.Context, upstreamID *int) (*ProxyBindings, error) {
 	var out ProxyBindings
-	if _, err := s.c.doJSON(ctx, http.MethodGet, "/api/proxy-routes/bindings", groupQuery(upstreamID), nil, &out); err != nil {
+	if _, err := s.c.doJSON(ctx, http.MethodGet, "/api/proxy-routes/bindings", s.c.groupQ(upstreamID), nil, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -112,7 +112,7 @@ func (s *ProxyService) BindAccounts(ctx context.Context, name string, files []st
 	var out ProxyBindResult
 	body := map[string]any{"files": files, "bound": bound}
 	path := proxyRoutePath(name) + "/accounts"
-	if _, err := s.c.doJSON(ctx, http.MethodPost, path, groupQuery(upstreamID), body, &out); err != nil {
+	if _, err := s.c.doJSON(ctx, http.MethodPost, path, s.c.groupQ(upstreamID), body, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -123,7 +123,7 @@ func (s *ProxyService) AutoAssign(ctx context.Context, name string, count int, i
 	var out ProxyBindResult
 	body := map[string]any{"count": count, "include_bound": includeBound}
 	path := proxyRoutePath(name) + "/auto-assign"
-	if _, err := s.c.doJSON(ctx, http.MethodPost, path, groupQuery(upstreamID), body, &out); err != nil {
+	if _, err := s.c.doJSON(ctx, http.MethodPost, path, s.c.groupQ(upstreamID), body, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil

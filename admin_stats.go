@@ -21,6 +21,26 @@ func realmQuery(realm Realm) url.Values {
 	return q
 }
 
+// DateRange 是自定义日期区间（`YYYY-MM-DD`），**两端都含**。
+//
+// 只有 Start / End **都填了**才生效（服务端要求成对）；只填一个会被忽略，
+// 退回按 Days 的口径。Start 晚于 End 会被服务端自动交换，跨度上限 3650 天。
+// 日期格式非法时**静默退回 Days 口径**（不报错）——别指望它替你校验输入。
+type DateRange struct {
+	Start string
+	End   string
+}
+
+// apply 把区间写进查询参数（两端都空则什么都不做，等于沿用 Days）。
+func (r DateRange) apply(q url.Values) bool {
+	if r.Start == "" || r.End == "" {
+		return false
+	}
+	q.Set("start", r.Start)
+	q.Set("end", r.End)
+	return true
+}
+
 // Summary 拉取总览。
 func (s *StatsService) Summary(ctx context.Context, realm Realm) (*StatsSummary, error) {
 	var out StatsSummary
@@ -123,6 +143,169 @@ func (s *StatsService) RepairUsage(ctx context.Context) (map[string]any, error) 
 func (s *StatsService) RebuildUsage(ctx context.Context) (map[string]any, error) {
 	var out map[string]any
 	if _, err := s.c.doJSON(ctx, http.MethodPost, "/api/stats/rebuild-usage", nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// ── 按账号聚合（/api/stats/by-account*）──────────────────────
+
+// AccountStatsQuery 是「按账号」聚合的筛选条件。
+//
+// Start / End 都是 YYYY-MM-DD，且**两端都含**；给了它们就忽略 Days。
+type AccountStatsQuery struct {
+	Days  int
+	Realm Realm
+	Start string
+	End   string
+	Limit int
+}
+
+// AccountUsagePoint 是一条「日期 × 账号」的用量。
+type AccountUsagePoint struct {
+	Day      string `json:"day"`
+	Account  string `json:"account"`
+	Nickname string `json:"nickname"`
+	// UID8 是账号列 `昵称(uid8)` 里拆出来的短 uid（拆不出时为空串）。
+	UID8     string  `json:"uid8"`
+	Requests int     `json:"requests"`
+	Tokens   int     `json:"tokens"`
+	Credit   float64 `json:"credit"`
+	// Cost 是费用（元）；nil = 这个模型没收录价目。
+	Cost *float64 `json:"cost"`
+}
+
+// AccountUsageList 是 GET /api/stats/by-account 的返回。
+type AccountUsageList struct {
+	Items []AccountUsagePoint `json:"items"`
+	Total int                 `json:"total"`
+	// Truncated 表示行数超过 limit，被截断了。
+	Truncated bool   `json:"truncated"`
+	From      string `json:"from"`
+	To        string `json:"to"`
+}
+
+// AccountModelUsage 是一条「账号 × 模型」的用量。
+type AccountModelUsage struct {
+	Account  string   `json:"account"`
+	Nickname string   `json:"nickname"`
+	UID8     string   `json:"uid8"`
+	Model    string   `json:"model"`
+	Requests int      `json:"requests"`
+	Tokens   int      `json:"tokens"`
+	Credit   float64  `json:"credit"`
+	Cost     *float64 `json:"cost"`
+}
+
+// AccountModelUsageList 是 GET /api/stats/by-account-model 的返回。
+type AccountModelUsageList struct {
+	Items     []AccountModelUsage `json:"items"`
+	Total     int                 `json:"total"`
+	Truncated bool                `json:"truncated"`
+	From      string              `json:"from"`
+	To        string              `json:"to"`
+}
+
+func accountStatsQuery(q AccountStatsQuery) url.Values {
+	vals := url.Values{}
+	if q.Days > 0 {
+		vals.Set("days", strconv.Itoa(q.Days))
+	}
+	if q.Realm != RealmAny {
+		vals.Set("realm", string(q.Realm))
+	}
+	if q.Start != "" {
+		vals.Set("start", q.Start)
+	}
+	if q.End != "" {
+		vals.Set("end", q.End)
+	}
+	if q.Limit > 0 {
+		vals.Set("limit", strconv.Itoa(q.Limit))
+	}
+	return vals
+}
+
+// ByAccount 按「日期 × 账号」聚合请求数、token 与积分。
+//
+// 数据源是请求日志：账号列是**异步回填**的，没回填的行不计入（宁可少一行，
+// 也不把「不知道是谁」摊到某个号上）。
+func (s *StatsService) ByAccount(ctx context.Context, q AccountStatsQuery) (*AccountUsageList, error) {
+	var out AccountUsageList
+	if _, err := s.c.doJSON(ctx, http.MethodGet, "/api/stats/by-account",
+		accountStatsQuery(q), nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ByAccountModel 按「账号 × 模型」聚合（回答「哪个号在跑哪些模型、各花了多少」）。
+func (s *StatsService) ByAccountModel(ctx context.Context, q AccountStatsQuery) (*AccountModelUsageList, error) {
+	var out AccountModelUsageList
+	if _, err := s.c.doJSON(ctx, http.MethodGet, "/api/stats/by-account-model",
+		accountStatsQuery(q), nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ── 自定义日期区间（v2.11 新增 start / end 参数）──────────────
+//
+// 这四个方法与同名的不带 Range 版本**行为一致时等价**：不传区间就按 days
+// 的口径走。之所以另起名字而不是把既有签名改成 variadic —— 后者会让方法值
+// （`f := s.Daily`）与接口断言的类型变掉，属于不必要的不兼容。
+
+// DailyRange 按天聚合指定日期区间（两端都含）。
+func (s *StatsService) DailyRange(ctx context.Context, r DateRange, days int, realm Realm) ([]UsagePoint, error) {
+	q := realmQuery(realm)
+	if days > 0 {
+		q.Set("days", strconv.Itoa(days))
+	}
+	r.apply(q)
+	var out []UsagePoint
+	if _, err := s.c.doJSON(ctx, http.MethodGet, "/api/stats/daily", q, nil, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// CreditsFlowRange 拉取指定日期区间的积分收支。
+func (s *StatsService) CreditsFlowRange(ctx context.Context, r DateRange, days int, realm Realm) (*CreditsFlow, error) {
+	q := realmQuery(realm)
+	if days > 0 {
+		q.Set("days", strconv.Itoa(days))
+	}
+	r.apply(q)
+	var out CreditsFlow
+	if _, err := s.c.doJSON(ctx, http.MethodGet, "/api/stats/credits", q, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ByModelRange 按模型聚合指定日期区间。
+func (s *StatsService) ByModelRange(ctx context.Context, r DateRange, days int, realm Realm) ([]UsageBreakdown, error) {
+	q := realmQuery(realm)
+	if days > 0 {
+		q.Set("days", strconv.Itoa(days))
+	}
+	r.apply(q)
+	var out []UsageBreakdown
+	if _, err := s.c.doJSON(ctx, http.MethodGet, "/api/stats/by-model", q, nil, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// ByKeyRange 按密钥聚合指定日期区间。
+func (s *StatsService) ByKeyRange(ctx context.Context, r DateRange, days int, realm Realm) ([]UsageBreakdown, error) {
+	q := realmQuery(realm)
+	if days > 0 {
+		q.Set("days", strconv.Itoa(days))
+	}
+	r.apply(q)
+	var out []UsageBreakdown
+	if _, err := s.c.doJSON(ctx, http.MethodGet, "/api/stats/by-key", q, nil, &out); err != nil {
 		return nil, err
 	}
 	return out, nil

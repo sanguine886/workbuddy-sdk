@@ -49,6 +49,9 @@ type ProxyProbe struct {
 	ExitIP   string `json:"exit_ip"`
 	ExitInfo string `json:"exit_info"`
 	Error    string `json:"error"`
+	// Hint 是失败时的**可执行建议**（按失败类型给出：协议 / 端口 / 认证 / 规则）。
+	// 原始 Error 仍保留，两者一起看。
+	Hint string `json:"hint,omitempty"`
 }
 
 // ProxyPool 是代理池的挑选配置与一览。
@@ -425,6 +428,12 @@ type UsageHourPoint struct {
 	CompletionTokens int     `json:"completion_tokens"`
 	Credit           float64 `json:"credit"`
 	Failed           int     `json:"failed"`
+	// Success 是该小时的成功请求数（2xx）；nil = 旧服务端不返回该字段。
+	Success *int `json:"success"`
+	// Cost 是按官方价估算的费用（元）；nil = 该小时没有可计价的调用。
+	Cost *float64 `json:"cost"`
+	// UnpricedRequests 是该小时里没计入费用的请求数。
+	UnpricedRequests int `json:"unpriced_requests"`
 }
 
 // CreditsFlowPoint 是一天的积分收入 / 支出。
@@ -454,6 +463,13 @@ type CreditsFlow struct {
 	Week  CreditsFlowSum     `json:"week"`
 	Total CreditsFlowSum     `json:"total"`
 	Daily []CreditsFlowPoint `json:"daily"`
+	// Granularity 是 Daily 的粒度："hour" | "day"。
+	//
+	// 范围正好是今天一天时按小时给（否则只有一根柱子看不出趋势），
+	// 其它情况按天；此时 Hourly 才非空。
+	Granularity string `json:"granularity"`
+	// Hourly 是小时粒度的收支明细（仅 Granularity == "hour" 时返回）。
+	Hourly []CreditsFlowPoint `json:"hourly,omitempty"`
 }
 
 // ── GitHub 凭据 / 镜像 ──────────────────────────────────
@@ -497,13 +513,16 @@ type UpdatePackage struct {
 // 这些数字不是向上游现问的（DataSource 恒为 "panel-recorded"），
 // 读取时刻即 SnapshotAt。
 type KeyUsage struct {
-	Object     string         `json:"object"`
-	Key        UsageKey       `json:"key"`
-	Tokens     UsageAllowance `json:"tokens"`
-	Credits    UsageAllowance `json:"credits"`
-	LastUsedAt int64          `json:"last_used_at"`
-	SnapshotAt int64          `json:"snapshot_at"`
-	DataSource string         `json:"data_source"`
+	Object  string         `json:"object"`
+	Key     UsageKey       `json:"key"`
+	Tokens  UsageAllowance `json:"tokens"`
+	Credits UsageAllowance `json:"credits"`
+	// DailyTokens 是今日 token 额度（服务器本地日期，次日 0 点恢复）。
+	// v2.11 起才有；旧服务端返回的是零值。
+	DailyTokens UsageAllowance `json:"daily_tokens"`
+	LastUsedAt  int64          `json:"last_used_at"`
+	SnapshotAt  int64          `json:"snapshot_at"`
+	DataSource  string         `json:"data_source"`
 }
 
 // UsageKey 是这把密钥的元信息（不含明文）。

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
@@ -27,6 +28,11 @@ type APIError struct {
 	Message    string // 人类可读信息（可能为空）
 	Hint       string // 网关面的 error.gateway_hint（可执行建议）
 	Raw        []byte // 原始响应体
+	// RetryAfter 是 Retry-After 头换算出的秒数；0 = 没有该头或无法解析。
+	//
+	// 429 响应会带它（服务端把上游文案里的「将在 … 重置」换算成了秒数），
+	// 据此退避比固定间隔更准；每日配额耗尽时同样会带。
+	RetryAfter int
 }
 
 func (e *APIError) Error() string {
@@ -76,8 +82,16 @@ func (e *QuotaError) Is(target error) bool {
 //
 //	网关面：{"error":{"message":..,"type":..,"code":..,"gateway_hint":..}}
 //	管理面：{"detail":"中文散文"} / {"code":"..","error":".."}
-func newAPIError(status int, raw []byte) *APIError {
+//
+// newAPIErrorWithHeader 把响应体解析成 *APIError，并从响应头取 Retry-After。
+func newAPIErrorWithHeader(status int, raw []byte, h http.Header) *APIError {
 	e := &APIError{StatusCode: status, Raw: raw}
+	if h != nil {
+		// 复用 retry.go 的解析（秒数或 HTTP 日期），这里只要整数秒。
+		if d, ok := parseRetryAfter(h.Get("Retry-After")); ok {
+			e.RetryAfter = int(d / time.Second)
+		}
+	}
 
 	var gw struct {
 		Error struct {

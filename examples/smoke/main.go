@@ -84,6 +84,27 @@ func main() {
 		fmt.Println("OK   /v1/models: 200")
 	}
 
+	// 余额端点：/api/usage/token/ 挂在 /api 前缀下，但用的是**网关密钥**。
+	// 这条不需要上游，能真正跑通说明密钥注入对了。
+	tu, err := gw.TokenUsage(ctx)
+	if err != nil {
+		log.Fatalf("FAIL token.usage: %v", err)
+	}
+	fmt.Printf("OK   token.usage: available=%v scope=%s\n", tu.Data.TotalAvailable, tu.Data.Scope)
+
+	cr, err := gw.Credits(ctx)
+	if err != nil {
+		log.Fatalf("FAIL credits: %v", err)
+	}
+	fmt.Printf("OK   credits: usage=%v available=%v\n", cr.Data.TotalUsage, cr.Data.TotalAvailable)
+
+	// /api/status 是公开端点（余额单位元数据），不需要任何凭据。
+	bs, err := wbsdk.NewClient(base).BalanceStatus(ctx)
+	if err != nil {
+		log.Fatalf("FAIL balance.status: %v", err)
+	}
+	fmt.Printf("OK   balance.status: unit=%s\n", bs.Data.CustomCurrencySymbol)
+
 	if err := admin.Keys().Delete(ctx, created.ID); err != nil {
 		log.Fatalf("FAIL keys.delete: %v", err)
 	}

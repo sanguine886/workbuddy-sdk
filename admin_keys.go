@@ -63,3 +63,27 @@ func (s *KeysService) CheckModels(ctx context.Context, models []string, realm Re
 	}
 	return &out, nil
 }
+
+// RevealedKey 是一把密钥的明文。
+type RevealedKey struct {
+	ID   int    `json:"id"`
+	Name string `json:"name"`
+	// Prefix 是密钥前缀（便于核对是哪一把）。
+	Prefix string `json:"prefix"`
+	// Key 是**明文密钥**——它能用完额度，拿到就当密码保管。
+	Key string `json:"key"`
+}
+
+// Reveal 取回一把已创建密钥的明文（「再复制一次」）。
+//
+// 列表接口只读账号（viewer）也能调，所以取明文单独要求**管理员**，且每次留
+// 审计（只记哪一把，绝不记明文）。存量密钥（面板保存明文之前建的）库里只有
+// 哈希，取不回来时服务端回 **409** 并说明该怎么办——不要把它当成
+// 「密钥不存在」（404）。
+func (s *KeysService) Reveal(ctx context.Context, id int) (*RevealedKey, error) {
+	var out RevealedKey
+	if _, err := s.c.doJSON(ctx, http.MethodPost, keyPath(id)+"/reveal", nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}

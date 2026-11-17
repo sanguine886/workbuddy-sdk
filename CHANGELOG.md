@@ -3,6 +3,163 @@
 本文件记录 workbuddy-sdk 的版本变更。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.4.0] - 2026-11-17
+
+对齐 workbuddy-manager **v2.11.17**：191 个端点里 189 个有具名方法，剩下两个是
+**别名路径**（`/v2/chat/completions`、`/responses`），用 `Do` / `DoStream` 直达。
+`scripts/audit_endpoints.py --ref v2.11.17` 的退出码为 0。
+
+### 破坏性变更
+
+- **`Upstream().Status` 改打 `/api/upstream/status`**。v2.11 起「上游运行时状态」
+  从 `/api/status` 搬走了——那个地址让给了客户端余额协议的**公开元数据**端点
+  （`{"success":true,"data":{quota_per_unit,…}}`），必须无鉴权可达。继续用旧路径
+  的话，解出来的是一片零值而不报错。新增 `Upstream().StatusOf(ctx, upstreamID)`
+  按分组取。
+
+### 新增
+
+- **监控**（`Watchdog()`）：`Config` / `SaveConfig` / `Status` / `Run` /
+  `ResetBaseline` / `CheckMailEgress` / `TestMail` / `QQBots` / `TestQQ` /
+  `TestLLM`。配置是**局部更新**（服务端以当前配置为底合并），凭据字段只回掩码。
+- **抓包**（`Tap()`）：`Config` / `SaveConfig` / `Backfill` / `Prune` /
+  `Sessions` / `Session` / `DeleteSession` / `Turn` / `Diff` / `ExportSession`
+  （自包含 HTML）/ `Clear`。轮次正文随协议而变，用 `json.RawMessage` 保留原文。
+- **账号风险预警**（`AccountRisk()`）：`List` / `Acknowledge` / `Resume`
+  （解不掉时服务端回 409）。
+- **账号顺序与调度**（`Accounts()`）：`Order` / `SaveOrder`（自定义排序）、
+  `TaskScheduler` / `KeepTaskScheduler`（只保留一套调度）。
+- **价目 / CORS / 自动更新**（`Settings()`）：`Pricing` / `SavePricing`、
+  `GatewayCORS` / `SaveGatewayCORS`、`AutoUpdate` / `SaveAutoUpdate`。
+- **按账号统计**（`Stats()`）：`ByAccount` / `ByAccountModel`。
+- **其它**：`Keys().Reveal`（取回密钥明文）、`Logs().AccountBackfill`
+  （账号列为何是空的）、`Client.ToolsSearch`（`POST /v1/tools/search` web 搜索
+  透传）、`Client.TokenUsage` / `Client.Credits` / `Client.BalanceStatus`
+  （余额三端点）。
+- **账号积分快照**（`Accounts()`）：`CreditsSnapshotInactive`（连停用 / 令牌过期
+  的账号一起返回，每行带 `Active`）、`RefreshCredit`（只刷新一个账号文件）。
+  原有的 `CreditsSnapshot` / `RefreshCredits` 签名不变。
+- **账号定向重登**（`Accounts()`）：`StartAuthFor(ctx, realm, uid)` —— 对已存在的
+  账号刷新凭证，版本跟随目标账号（传的 realm 被忽略）。旧 `StartAuth` 不带 uid，
+  行为不变。返回值新增 `AuthStart.Target`（这次刷的是谁）。
+- **清除冷却的明细**（`Accounts()`）：`ClearCoolingDetail` —— 返回走的是在线清除
+  （`Online` / `Models` / `Unfrozen`）还是离线清除（`StateFile` / `Backup` /
+  `Before`）。旧 `ClearCooling` 保持不变。
+- **统计的自定义日期区间**（`Stats()`）：`DailyRange` / `CreditsFlowRange` /
+  `ByModelRange` / `ByKeyRange` + `DateRange`（`YYYY-MM-DD`，**两端都含**）。
+  只有 Start / End 都填才生效；只填一个会被服务端忽略并退回 `days` 口径。
+- **`Ptr[T]`**：`wbsdk.Ptr(v)` 返回 `v` 的指针。局部更新的请求体用 `nil` 表示
+  「不改」，用 `Ptr("")` / `Ptr(false)` 表示「真的改成零值」——这两件事在服务端
+  是**不同的动作**，值类型 + `omitempty` 表达不了后者。
+- **`WithUpstreamID(id)`**：设 client 级默认分组。上游几乎每个账号级端点都接受
+  `upstream_id`，不传就是操作**默认分组**；而错分组的症状常常是「账号文件不存在」
+  这种把人引向错误方向 404。显式传 `upstreamID` 的调用仍以参数为准，运行期可用
+  `SetUpstreamID` 切换。数据面（`/v1/*`）不受影响（由密钥决定上游）。
+- **`StartAuthIn` / `PollAuthIn`**（`Accounts()`）：发码 / 轮询的全参数版本，补上
+  `region`（国际版新号漏了它 → 落盘成功但随后聊天报 14017）、`upstream_id`
+  （否则账号写进默认分组）、`proxy`（写上游全局配置，`Ptr("")` 是切回默认线路）。
+  `StartAuth` / `StartAuthFor` / `PollAuth` 签名不变。
+- **`TokenUsageOf` / `CreditsOf`**：指定余额报哪个池（`ScopeAuto` / `ScopeCN` /
+  `ScopeGlobal` / `ScopeMerged`）。原方法等价于 `ScopeAuto`（不传 `scope`）。
+- **`APIError.RetryAfter`**：429 的 `Retry-After` 头换算成秒数（0 = 没有该头）。
+  服务端会把上游文案里的「将在 … 重置」算成秒数，据此退避比固定间隔准。
+
+### 变更
+
+- `/api/usage/token/` 挂在管理面前缀下，但鉴权用的是**网关密钥**。传输层新增
+  `isGatewayKeyPath`：这个路径注入 `wbk_` 密钥而不是会话 Cookie，401 也**不**
+  触发会话重登（密钥无效重登没用）。
+- `/api/status` 现在是**公开**端点（只声明数值单位，不含额度），因此它不再
+  注入凭据，也不因为「没配管理面凭据」而报错。
+- 已有类型补齐 v2.11 新增的字段（都是**可选 / 附加上下文**，对旧服务端无影响）：
+  `RequestLog.Account/Effort/Channel/Cost`、`UsagePoint.Cost/UnpricedRequests/
+  Success`、`UsageBreakdown.Cost/UnpricedRequests/TokensPerSec/
+  ThroughputSamples`、`StatsSummary.*Cost/*Unpriced/CostCurrency`、
+  `UsageHourPoint.Cost/UnpricedRequests/Success`、`ApiKey.DailyQuota/
+  DailyUsedTokens/UpstreamID/PacketID`、`Account.AddedAt/RefreshRisk`、
+  `KeyUsage.DailyTokens`、`CreditsSnapshot.ActiveCount/TotalRegistered`、
+  `AuthPoll.ExpectedUID/ExpectedName/Revive`、`ProbeModelRow.GatewaySynced/
+  GatewaySyncSkipped/GatewaySyncMessage`、`ProxyProbe.Hint`、
+  `CreditsFlow.Granularity/Hourly`，以及**请求侧**的 `KeyIn.DailyQuota` /
+  `KeyPatch.DailyQuota`。
+- `Account.PoolUnknown` 标记 **Deprecated**：它从来不是服务端字段（`poolUnknown`
+  是前端 `account-status.ts` 自己算的），所以一直是 nil。判断「看不到上游」请用
+  `AccountsResponse.PoolAvailable`。
+- `AuthPoll` 的两个旧字段订正：`Status` 的取值里 **`realm_mismatch` 不存在**（两版
+  上游都搜不到该字符串），真正新增的是 `account_mismatch`（定向重登扫错账号）；
+  `Expected` / `Got` 标记 **Deprecated** —— 上游从来没有这两个键，一直是空串，
+  判断扫错账号请用 `Status == "account_mismatch"` + `ExpectedUID`。
+- `ProbeModelsIn` 的注释订正：服务端上限是**账号 ≤ 20、模型 ≤ 10、组合 ≤ 60**
+  （旧注释写的「账号 ≤ 10、模型 ≤ 30」从 v2.10.2 起就不对）。
+- `Accounts().CreditsSnapshot` 的**服务端**语义变了：默认只返回当前还能被调度的
+  账号（停用 / 令牌过期的默认排除），已删账号的登记不再下发。要全量用
+  `CreditsSnapshotInactive`；对账时用 `TotalRegistered` 对比登记表总行数。
+
+- **`Settings().SaveAutoUpdate` 的请求体从 `AutoUpdatePatch`（指针 + omitempty）
+  换成 `AutoUpdateConfig`（值类型）**：这个接口是**整体替换**，不是局部合并——
+  `validate_config` 缺 `interval_hours` / `window_start` / `window_end` 直接 400，
+  其余字段缺失则回落默认值。指针形状会让人以为「只传一个字段就行」。
+  同时 `GatewayCORSPatch.Origins` 从 `[]string` 改成 `*[]string`：它确实是局部
+  合并，而 `origins: []` 有「清空」的含义，`omitempty` 把这个语义吃掉了。
+- **监控 / 抓包配置的补丁字段全是指针**（`WatchdogLLMPatch` / `WatchdogMailPatch` /
+  `WatchdogQQPatch` 的字符串、布尔、整数字段）：`nil` = 不改，`Ptr("")` = 清空。
+  旧的值类型 + `omitempty` 无法表达「清空已存的密码」。
+- `Tap().ExportSession` 改用 `Accept: text/html`（该端点返回 HTML，原来发
+  `application/json` 是错的），并检测 32 MiB 上限——超限时报错，而不是悄悄给
+  一份被截断的 HTML。
+- `TapTurn` 补齐**两端视角**：`UpstreamResponse` / `UpstreamRecon` 是网关↔上游
+  那一跳，`ClientResponse` / `ClientRecon` / `Passthrough` / `ClientProtocol` 是
+  客户端真正收到的。Chat（透传）两者相同，Anthropic / Responses（翻译）是两份
+  不同报文——只看 `Response` 会把翻译层的输出当成客户端输入。另补 `RequestDigest`
+  （截断场景下的 diff 用它比）。
+- `WatchdogRun` 补 `Skipped` / `Egress`：早退时返回 `ok=false` + `skipped`
+  （「已有一次检测在运行」/「SMTP 出口不通」），此时其余字段是零值——别把它当成
+  「跑过了，什么都没变」。同批补 `WatchdogSend.Egress`、
+  `WatchdogTargetResult.PreviousDigest`、`WatchdogVerdict.LLMError`。
+- `PricingModelTable` 补 `Label`：价目表里每个模型的显示名。服务端不校验它但
+  原样保存，丢了它面板上只能显示键名（`deepseek-flash` 而不是 `DeepSeek-V4.1-Flash`）。
+- `doOnce` 里 401 自动重登的路径判断改用**规范化后**的 path：用 `Do` 逃生舱传
+  `"api/keys"`（无前导斜杠）时，此前不会触发重登。
+
+### 修掉的硬性契约错误
+
+- **`TapTurn.Status` / `TapTurnSummary.Status` 从 `string` 改成 `*int`**：
+  `tap_turns.status` 是 SQLite 的 **INTEGER** 列（HTTP 状态码），声明成 string
+  会让 `Turn()` / `Session()` 对**任何真实记录**解码失败
+  （`cannot unmarshal number into ... type string`）。列表接口不返回轮次详情，
+  所以只看 `Sessions()` 的测试发现不了——已补 `Turn()` / `Session()` 的 fixture。
+- **`PollAuthIn` 在 `RealmAny` 时不再发 `realm`**：轮询的 `realm` 是
+  **一致性校验**而不是路由，服务端拿它与发码时登记的版本比，不一致就回
+  `realm_mismatch` 且不落盘。折成 `cn` 会让**国际版的码恒判不一致**，调用方一路
+  空转到过期。发码侧（`StartAuthIn`）相反：那里的 realm 真的决定打哪一版端点。
+- `TapTurnSummary` / `TapTurn` 的四个 token 计数改成 `*int`：上游那几列可空，
+  `NULL` 是「没采到」而不是 0——0 token 是一个真实结果（例如失败请求），
+  两者混起来会让用量统计失真。同结构里 `latency_ms` / `cost` 本来就是指针。
+- `WatchdogConfigPatch.Targets` 与 `WatchdogMailPatch.To` 改成 `*[]T`：
+  `Ptr([]string{})` 是「清空收件人」，`Ptr([]WatchdogTarget{})` 是「发一个空列表
+  让服务端回 400」。用值切片时 `omitempty` 会把两者都吞成「不改」。
+- `Pricing.Aliases` 用新增的 `StringMap`（`map[string]string` 加自定义
+  `UnmarshalJSON`，跳过非字符串值）：服务端只校验 `aliases` 是个对象、不校验
+  值的类型，一个被改成数字的键会让整份价目表读不出来。
+- `AuthStart` 补 `Proxy`：服务端会回显这次实际用的出站线路名，排障时看它，
+  别拿自己传的参数当事实。
+
+### 说明
+
+- `Tap()` 的接口读取的是**完整对话内容**（含 system prompt 与工具结果），
+  服务端要求管理员且留审计。`Tap().ExportSession` 返回自包含 HTML 的字节，
+  文件名取自服务端的 `Content-Disposition`。
+- 监控的 `TestMail` / `TestQQ` / `TestLLM` 接受**表单当前值**（不落库），
+  传 nil 表示用已保存的配置——测试用的是「还没保存也能验」的那份值。
+- **上游行为变化（本库不代劳，但要知情）**：
+  - 11102 / `service info not found` 从 5xx 改判 **404** `model_not_found`，
+    于是会命中 `NotFoundError` 而不是 `*APIError`（按 5xx 重试的调用方要改）。
+  - 429 现在带 `Retry-After`（见上）。
+  - 未锁定版本的密钥，**裸模型名白名单**从「只匹配国内版」改为「允许同名模型的
+    任意版本」；显式 `cn:` / `global:` 仍只放行对应版本。已锁版本的密钥不变。
+  - `/v1/models` 的国内版 id 不再带 `cn:` 前缀（`global:` 保留），按前缀做匹配的
+    调用方需自行适配。
+
 ## [0.3.0] - 2026-10-20
 
 对齐 workbuddy-manager **v2.10.2**：149 个端点里 147 个有具名方法，剩下两个是

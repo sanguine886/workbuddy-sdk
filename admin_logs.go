@@ -64,3 +64,36 @@ func (s *LogsService) Clear(ctx context.Context) error {
 	_, err := s.c.doJSON(ctx, http.MethodPost, "/api/logs/clear", nil, nil, nil)
 	return err
 }
+
+// AccountBackfill 是「请求日志的账号列」的来源自诊断。
+//
+// 账号列空的时候有四种完全不同的原因（模式配错 / 日志路径错 / 上游改了行格式
+// / 时间对不上），靠猜只能来回要现场信息——这个接口把事实直接摆出来。
+type AccountBackfill struct {
+	// Mode 是上游的运行模式：native | systemd | docker。
+	Mode string `json:"mode"`
+	// Source 是日志从哪读（文件路径 / unit 名 / 容器名）。
+	Source string `json:"source"`
+	// CheckedAt 是最近一次采集的时刻。
+	CheckedAt int64 `json:"checked_at"`
+	// Lines 是读到几行、Parsed 解析出几条、Filled 是这一轮填回了几条。
+	Lines  int    `json:"lines"`
+	Parsed int    `json:"parsed"`
+	Filled int    `json:"filled"`
+	Error  string `json:"error"`
+	// Exists 是日志源是否存在（仅 native 模式有）。
+	Exists *bool `json:"exists"`
+	// Size 是日志文件大小（仅 native 模式有）。
+	Size *int64 `json:"size"`
+	// Hint 是给人看的处理建议（有问题时才有）。
+	Hint string `json:"hint"`
+}
+
+// AccountBackfill 读取账号回填的自诊断信息。
+func (s *LogsService) AccountBackfill(ctx context.Context) (*AccountBackfill, error) {
+	var out AccountBackfill
+	if _, err := s.c.doJSON(ctx, http.MethodGet, "/api/logs/account-backfill", nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
