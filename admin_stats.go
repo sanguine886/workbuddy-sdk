@@ -127,3 +127,104 @@ func (s *StatsService) RebuildUsage(ctx context.Context) (map[string]any, error)
 	}
 	return out, nil
 }
+
+// ── 按账号聚合（/api/stats/by-account*）──────────────────────
+
+// AccountStatsQuery 是「按账号」聚合的筛选条件。
+//
+// Start / End 都是 YYYY-MM-DD，且**两端都含**；给了它们就忽略 Days。
+type AccountStatsQuery struct {
+	Days  int
+	Realm Realm
+	Start string
+	End   string
+	Limit int
+}
+
+// AccountUsagePoint 是一条「日期 × 账号」的用量。
+type AccountUsagePoint struct {
+	Day      string `json:"day"`
+	Account  string `json:"account"`
+	Nickname string `json:"nickname"`
+	// UID8 是账号列 `昵称(uid8)` 里拆出来的短 uid（拆不出时为空串）。
+	UID8     string  `json:"uid8"`
+	Requests int     `json:"requests"`
+	Tokens   int     `json:"tokens"`
+	Credit   float64 `json:"credit"`
+	// Cost 是费用（元）；nil = 这个模型没收录价目。
+	Cost *float64 `json:"cost"`
+}
+
+// AccountUsageList 是 GET /api/stats/by-account 的返回。
+type AccountUsageList struct {
+	Items []AccountUsagePoint `json:"items"`
+	Total int                 `json:"total"`
+	// Truncated 表示行数超过 limit，被截断了。
+	Truncated bool   `json:"truncated"`
+	From      string `json:"from"`
+	To        string `json:"to"`
+}
+
+// AccountModelUsage 是一条「账号 × 模型」的用量。
+type AccountModelUsage struct {
+	Account  string   `json:"account"`
+	Nickname string   `json:"nickname"`
+	UID8     string   `json:"uid8"`
+	Model    string   `json:"model"`
+	Requests int      `json:"requests"`
+	Tokens   int      `json:"tokens"`
+	Credit   float64  `json:"credit"`
+	Cost     *float64 `json:"cost"`
+}
+
+// AccountModelUsageList 是 GET /api/stats/by-account-model 的返回。
+type AccountModelUsageList struct {
+	Items     []AccountModelUsage `json:"items"`
+	Total     int                 `json:"total"`
+	Truncated bool                `json:"truncated"`
+	From      string              `json:"from"`
+	To        string              `json:"to"`
+}
+
+func accountStatsQuery(q AccountStatsQuery) url.Values {
+	vals := url.Values{}
+	if q.Days > 0 {
+		vals.Set("days", strconv.Itoa(q.Days))
+	}
+	if q.Realm != RealmAny {
+		vals.Set("realm", string(q.Realm))
+	}
+	if q.Start != "" {
+		vals.Set("start", q.Start)
+	}
+	if q.End != "" {
+		vals.Set("end", q.End)
+	}
+	if q.Limit > 0 {
+		vals.Set("limit", strconv.Itoa(q.Limit))
+	}
+	return vals
+}
+
+// ByAccount 按「日期 × 账号」聚合请求数、token 与积分。
+//
+// 数据源是请求日志：账号列是**异步回填**的，没回填的行不计入（宁可少一行，
+// 也不把「不知道是谁」摊到某个号上）。
+func (s *StatsService) ByAccount(ctx context.Context, q AccountStatsQuery) (*AccountUsageList, error) {
+	var out AccountUsageList
+	if _, err := s.c.doJSON(ctx, http.MethodGet, "/api/stats/by-account",
+		accountStatsQuery(q), nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ByAccountModel 按「账号 × 模型」聚合（回答「哪个号在跑哪些模型、各花了多少」）。
+func (s *StatsService) ByAccountModel(ctx context.Context, q AccountStatsQuery) (*AccountModelUsageList, error) {
+	var out AccountModelUsageList
+	if _, err := s.c.doJSON(ctx, http.MethodGet, "/api/stats/by-account-model",
+		accountStatsQuery(q), nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}

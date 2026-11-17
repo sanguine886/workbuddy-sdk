@@ -120,9 +120,19 @@ func isAdminPath(path string) bool { return hasPathPrefix(path, "/api") }
 // /api/claim/* 是红包抽奖端：收到分享链接的人本来就没有账号，服务端刻意公开
 // （防滥用靠「每 IP 一次」+ 128 位抽奖码 + 有效期）。把它算进来才不会因为
 // 「没配管理面凭据」被客户端自己拦下。
+//
+// /api/status 是客户端余额协议的**公开元数据**端点（只声明数值单位，不含任何
+// 额度）；它原先是「上游运行时状态」，v2.11 起那个接口搬到了 /api/upstream/status。
 func isPublicPath(path string) bool {
-	return path == "/healthz" || path == "/api/healthz" || hasPathPrefix(path, "/api/claim")
+	return path == "/healthz" || path == "/api/healthz" || path == "/api/status" ||
+		hasPathPrefix(path, "/api/claim")
 }
+
+// isGatewayKeyPath 报告该路径用**网关密钥**（wbk_）鉴权，即便它挂在 /api 下。
+//
+// 余额端点 /api/usage/token/ 属于此类：路径在管理面前缀里，鉴权却是网关密钥
+// ——服务端直接读 Authorization 头，不认会话 Cookie。
+func isGatewayKeyPath(path string) bool { return path == "/api/usage/token/" }
 
 func isGatewayPath(path string) bool {
 	return hasPathPrefix(path, "/v1") ||
@@ -173,6 +183,9 @@ func (c *Client) injectAuth(ctx context.Context, path string, h http.Header) err
 		return nil
 	}
 	switch {
+	case isGatewayKeyPath(path):
+		// 余额端点挂在 /api 下，但鉴权用的是网关密钥，不是管理面会话。
+		return c.injectGatewayKey(ctx, h)
 	case isAdminPath(path):
 		// API Token 优先（它是长期凭据，且不参与 401 重登）。
 		if c.adminToken != "" {
@@ -190,16 +203,22 @@ func (c *Client) injectAuth(ctx context.Context, path string, h http.Header) err
 			h.Set("Cookie", cookie)
 		}
 	case isGatewayPath(path):
-		if c.key == nil {
-			return errors.New("wbsdk: 该接口需要网关密钥，请用 WithGatewayKey 配置")
-		}
-		token, err := c.key.Bearer(ctx)
-		if err != nil {
-			return err
-		}
-		if token != "" {
-			h.Set("Authorization", "Bearer "+strings.TrimPrefix(token, "Bearer "))
-		}
+		return c.injectGatewayKey(ctx, h)
+	}
+	return nil
+}
+
+// injectGatewayKey 注入网关密钥（Authorization: Bearer wbk_...）。
+func (c *Client) injectGatewayKey(ctx context.Context, h http.Header) error {
+	if c.key == nil {
+		return errors.New("wbsdk: 该接口需要网关密钥，请用 WithGatewayKey 配置")
+	}
+	token, err := c.key.Bearer(ctx)
+	if err != nil {
+		return err
+	}
+	if token != "" {
+		h.Set("Authorization", "Bearer "+strings.TrimPrefix(token, "Bearer "))
 	}
 	return nil
 }
@@ -247,7 +266,10 @@ func (c *Client) doOnce(ctx context.Context, method, path string, query url.Valu
 	if err != nil {
 		return nil, err
 	}
-	if resp.StatusCode == http.StatusUnauthorized && isAdminPath(path) && c.admin != nil {
+	// 401 重登只对**管理面会话**有意义：网关密钥的 401 是「密钥无效」，
+	// 重登并不会让它变好（余额端点挂在 /api 下但用网关密钥，别被它带偏）。
+	if resp.StatusCode == http.StatusUnauthorized && isAdminPath(path) &&
+		!isGatewayKeyPath(path) && c.admin != nil {
 		drainAndClose(resp.Body)
 		c.admin.Invalidate()
 		req2, err2 := c.newRequest(ctx, method, path, query, body, accept)

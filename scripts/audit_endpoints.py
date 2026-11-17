@@ -3,6 +3,9 @@
 
 用法：
     python scripts/audit_endpoints.py /path/to/workbuddy-manager
+    python scripts/audit_endpoints.py /path/to/workbuddy-manager --ref v2.11.17
+
+--ref 直接读取 Git 中的指定版本，不切换或修改上游工作区。
 
 退出码：0 = 全部覆盖（或只剩已声明的别名路径）；1 = 有未覆盖端点（可用于 CI / 发版检查）。
 
@@ -31,6 +34,7 @@ from __future__ import annotations
 import argparse
 import pathlib
 import re
+import subprocess
 import sys
 
 # 只用于「路径前缀分类」的字面量，不是请求目标——必须排除，否则全是假阳性
@@ -90,11 +94,26 @@ def missing_reasons(path: str, lits: list[list[str]]) -> list[str]:
     return lacks
 
 
-def collect_endpoints(upstream_root: pathlib.Path) -> list[tuple[str, str, str]]:
-    routers = upstream_root / 'server' / 'routers'
+def collect_endpoints(upstream_root: pathlib.Path, ref: str | None = None) -> list[tuple[str, str, str]]:
+    if ref:
+        # 先解析成 commit hash，再传给 show，避免 ref 被当作选项或路径解释。
+        commit = subprocess.check_output(
+            ['git', '-C', str(upstream_root), 'rev-parse', '--verify', '--end-of-options',
+             ref + '^{commit}'], encoding='utf-8',
+        ).strip()
+        paths = subprocess.check_output(
+            ['git', '-C', str(upstream_root), 'ls-tree', '-r', '--name-only', commit,
+             '--', 'server/routers'], encoding='utf-8',
+        ).splitlines()
+        sources = ((pathlib.PurePosixPath(p).name, subprocess.check_output(
+            ['git', '-C', str(upstream_root), 'show', f'{commit}:{p}'], encoding='utf-8',
+        )) for p in paths if pathlib.PurePosixPath(p).parent.as_posix() == 'server/routers'
+            and p.endswith('.py'))
+    else:
+        sources = ((f.name, f.read_text(encoding='utf-8'))
+                   for f in sorted((upstream_root / 'server' / 'routers').glob('*.py')))
     eps: list[tuple[str, str, str]] = []
-    for f in sorted(routers.glob('*.py')):
-        src = f.read_text(encoding='utf-8')
+    for filename, src in sources:
         # 一个文件里可能有**多个** APIRouter（例如红包装在 redpackets.py 里又单独
         # 挂了一个公开的 claim_router）。只认第一个的话，后面那些 router 的端点会
         # 被静默漏检——这个脚本的一个教训就是「别相信印象，去解析」。
@@ -110,7 +129,7 @@ def collect_endpoints(upstream_root: pathlib.Path) -> list[tuple[str, str, str]]
             var, method, path = mm.group(1), mm.group(2), mm.group(3)
             if var not in prefixes:
                 continue
-            eps.append((method.upper(), prefixes[var] + path, f.name))
+            eps.append((method.upper(), prefixes[var] + path, filename))
     return eps
 
 
@@ -128,15 +147,23 @@ def collect_sdk_literals(sdk_root: pathlib.Path) -> list[list[str]]:
 def main() -> int:
     ap = argparse.ArgumentParser(description='核对 SDK 与上游端点的覆盖差异')
     ap.add_argument('upstream', help='workbuddy-manager 仓库根目录')
+    ap.add_argument('--ref', help='读取指定 Git 版本（如 v2.11.17），不改上游工作区')
     args = ap.parse_args()
 
     upstream_root = pathlib.Path(args.upstream).resolve()
-    if not (upstream_root / 'server' / 'routers').is_dir():
+    if not args.ref and not (upstream_root / 'server' / 'routers').is_dir():
         print(f'找不到上游路由目录：{upstream_root / "server" / "routers"}', file=sys.stderr)
         return 2
 
     sdk_root = pathlib.Path(__file__).resolve().parent.parent
-    eps = collect_endpoints(upstream_root)
+    try:
+        eps = collect_endpoints(upstream_root, args.ref)
+    except (OSError, subprocess.CalledProcessError) as exc:
+        print(f'无法读取上游端点：{exc}', file=sys.stderr)
+        return 2
+    if not eps:
+        print('上游未找到任何端点，请检查路径与版本', file=sys.stderr)
+        return 2
     lits = collect_sdk_literals(sdk_root)
 
     missed: list[tuple[str, str, str, list[str]]] = []

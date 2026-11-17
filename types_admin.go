@@ -425,6 +425,8 @@ type UsageHourPoint struct {
 	CompletionTokens int     `json:"completion_tokens"`
 	Credit           float64 `json:"credit"`
 	Failed           int     `json:"failed"`
+	// Success 是该小时的成功请求数（2xx）。
+	Success int `json:"success"`
 }
 
 // CreditsFlowPoint 是一天的积分收入 / 支出。
@@ -497,13 +499,16 @@ type UpdatePackage struct {
 // 这些数字不是向上游现问的（DataSource 恒为 "panel-recorded"），
 // 读取时刻即 SnapshotAt。
 type KeyUsage struct {
-	Object     string         `json:"object"`
-	Key        UsageKey       `json:"key"`
-	Tokens     UsageAllowance `json:"tokens"`
-	Credits    UsageAllowance `json:"credits"`
-	LastUsedAt int64          `json:"last_used_at"`
-	SnapshotAt int64          `json:"snapshot_at"`
-	DataSource string         `json:"data_source"`
+	Object  string         `json:"object"`
+	Key     UsageKey       `json:"key"`
+	Tokens  UsageAllowance `json:"tokens"`
+	Credits UsageAllowance `json:"credits"`
+	// DailyTokens 是今日 token 额度（服务器本地日期，次日 0 点恢复）。
+	// v2.11 起才有；旧服务端返回的是零值。
+	DailyTokens UsageAllowance `json:"daily_tokens"`
+	LastUsedAt  int64          `json:"last_used_at"`
+	SnapshotAt  int64          `json:"snapshot_at"`
+	DataSource  string         `json:"data_source"`
 }
 
 // UsageKey 是这把密钥的元信息（不含明文）。

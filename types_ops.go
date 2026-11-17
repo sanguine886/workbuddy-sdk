@@ -33,6 +33,14 @@ type RequestLog struct {
 	Error            *string  `json:"error"`
 	Stream           bool     `json:"stream"`
 	Credit           *float64 `json:"credit"`
+	// Account 是本次实际用的上游账号，形如 `昵称(uid8)`；nil = 还没回填。
+	Account *string `json:"account"`
+	// Effort 是客户端显式传的思考强度档位；nil = 没传或历史记录。
+	Effort *string `json:"effort"`
+	// Channel 是按 UA 归类的客户端渠道（codex / vscode / cli / web / …）。
+	Channel *string `json:"channel"`
+	// Cost 是按官方价估算的费用（元）；nil = 这个模型没收录价目（不是 0）。
+	Cost *float64 `json:"cost"`
 }
 
 // ── 用量统计 ────────────────────────────────────────────
@@ -45,6 +53,12 @@ type UsagePoint struct {
 	CompletionTokens int     `json:"completion_tokens"`
 	Credit           float64 `json:"credit"`
 	Failed           *int    `json:"failed"`
+	// Success 是当日成功请求数（2xx）。
+	Success *int `json:"success"`
+	// Cost 是按官方价估算的费用（元）；nil = 这天没有可计价的调用。
+	Cost *float64 `json:"cost"`
+	// UnpricedRequests 是这天里没计入费用的请求数。
+	UnpricedRequests int `json:"unpriced_requests"`
 }
 
 // UsageBreakdown 是按模型 / 按密钥聚合的一行。
@@ -54,6 +68,14 @@ type UsageBreakdown struct {
 	PromptTokens     int     `json:"prompt_tokens"`
 	CompletionTokens int     `json:"completion_tokens"`
 	Credit           float64 `json:"credit"`
+	// Cost 是按官方价估算的费用（元）；nil = 没有可计价的调用。
+	Cost *float64 `json:"cost"`
+	// UnpricedRequests 是同一维度里没计入费用的请求数。
+	UnpricedRequests int `json:"unpriced_requests"`
+	// TokensPerSec 是输出速率（tokens/秒）；nil = 没有可用样本。
+	TokensPerSec *float64 `json:"tokens_per_sec"`
+	// ThroughputSamples 是参与速率计算的请求条数。
+	ThroughputSamples *int `json:"throughput_samples"`
 }
 
 // UsageHealth 暴露「统计没有在累计」这种静默故障。
@@ -86,6 +108,17 @@ type StatsSummary struct {
 	TopModel      *string       `json:"top_model"`
 	UsageHealth   *UsageHealth  `json:"usage_health"`
 	Failures      *FailureStats `json:"failures"`
+
+	// Cost 是按官方价估算的费用（元）；nil = 该区间没有可计价的调用。
+	TodayCost *float64 `json:"today_cost"`
+	WeekCost  *float64 `json:"week_cost"`
+	TotalCost *float64 `json:"total_cost"`
+	// Unpriced 是同一区间里**没有**计入费用的请求数。
+	TodayUnpriced int `json:"today_unpriced"`
+	WeekUnpriced  int `json:"week_unpriced"`
+	TotalUnpriced int `json:"total_unpriced"`
+	// CostCurrency 是费用币种（目前只有 CNY）。
+	CostCurrency string `json:"cost_currency"`
 }
 
 // ── 安全 / IP 管控 ──────────────────────────────────────

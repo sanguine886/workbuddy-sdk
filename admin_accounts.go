@@ -96,8 +96,20 @@ func (s *AccountsService) Credits(ctx context.Context, file string, force bool) 
 
 // RefreshCredits 并发刷新所有账号的实时积分。
 func (s *AccountsService) RefreshCredits(ctx context.Context, force bool) (*CreditsRefresh, error) {
+	return s.refreshCredits(ctx, force, "")
+}
+
+// RefreshCredit 只刷新**一个账号文件**的积分（多分组 / 单号排障时用）。
+func (s *AccountsService) RefreshCredit(ctx context.Context, file string, force bool) (*CreditsRefresh, error) {
+	return s.refreshCredits(ctx, force, file)
+}
+
+func (s *AccountsService) refreshCredits(ctx context.Context, force bool, file string) (*CreditsRefresh, error) {
 	q := url.Values{}
 	q.Set("force", strconv.FormatBool(force))
+	if file != "" {
+		q.Set("file", file)
+	}
 	var out CreditsRefresh
 	if _, err := s.c.doJSON(ctx, http.MethodPost, "/api/accounts/refresh-credits", q, nil, &out); err != nil {
 		return nil, err
@@ -333,4 +345,96 @@ func (s *AccountsService) Move(ctx context.Context, file string, toUpstreamID in
 		return nil, err
 	}
 	return &out, nil
+}
+
+// ── 账号顺序（/api/accounts/order）───────────────────────────
+
+// AccountOrder 是分组的账号自定义顺序（uid 数组）。
+//
+// 顺序里没提到的账号不会被删改，只是排到末尾——所以可以只提交当前可见的那几条。
+type AccountOrder struct {
+	Order []string `json:"order"`
+}
+
+// Order 读取分组的账号自定义顺序（只读不设管理员门槛：顺序是共享视图）。
+func (s *AccountsService) Order(ctx context.Context, upstreamID *int) (*AccountOrder, error) {
+	var out AccountOrder
+	if _, err := s.c.doJSON(ctx, http.MethodGet, "/api/accounts/order",
+		upstreamQuery(upstreamID), nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// SaveOrder 保存自定义顺序（限管理员：它改变的是所有人看到的列表顺序）。
+func (s *AccountsService) SaveOrder(ctx context.Context, order []string, upstreamID *int) (*AccountOrder, error) {
+	body := AccountOrder{Order: order}
+	var out AccountOrder
+	if _, err := s.c.doJSON(ctx, http.MethodPut, "/api/accounts/order",
+		upstreamQuery(upstreamID), body, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ── 两套调度的重叠（/api/accounts/task-scheduler）──────────────
+
+// TaskScheduler 是上游调度器与面板每日计划的重叠状态。
+type TaskScheduler struct {
+	Upstream TaskSchedulerUpstream `json:"upstream"`
+	// Panel 是面板每日计划各项任务的开关（checkin / compensation / …）。
+	Panel map[string]bool `json:"panel"`
+	// Conflicts 是两套同时在跑的任务名。
+	Conflicts []string `json:"conflicts"`
+}
+
+// TaskSchedulerUpstream 是上游调度器的开关。
+type TaskSchedulerUpstream struct {
+	// Available 为 false 表示上游配置读不到（此时下面的开关没有意义）。
+	Available bool `json:"available"`
+	Checkin   bool `json:"checkin"`
+	Activity  bool `json:"activity"`
+}
+
+// TaskSchedulerKeepResult 是「只保留一套调度」的结果。
+type TaskSchedulerKeepResult struct {
+	// Plan 是改完之后的每日计划。
+	Plan map[string]any `json:"plan"`
+	// Scheduler 是改完之后的重叠状态。
+	Scheduler TaskScheduler `json:"scheduler"`
+	// ReloadScheduled 表示是否已排上上游热重载（需要人工重启时为 false）。
+	ReloadScheduled *bool `json:"reload_scheduled"`
+	// ReloadHint 非空时说明配置已写入但当前环境无法自动重启上游。
+	ReloadHint string `json:"reload_hint"`
+}
+
+// TaskScheduler 读取两套调度的重叠状态。
+func (s *AccountsService) TaskScheduler(ctx context.Context) (*TaskScheduler, error) {
+	var out TaskScheduler
+	if _, err := s.c.doJSON(ctx, http.MethodGet, "/api/accounts/task-scheduler", nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// KeepTaskScheduler 只保留一套调度（限管理员）。
+//
+// keep 取值 "upstream"（关掉面板的签到 / 领补偿）或 "panel"（反过来）。它会写
+// 上游 config 并触发热重载，改完可能要等容器重启才生效。
+func (s *AccountsService) KeepTaskScheduler(ctx context.Context, keep string) (*TaskSchedulerKeepResult, error) {
+	body := map[string]string{"keep": keep}
+	var out TaskSchedulerKeepResult
+	if _, err := s.c.doJSON(ctx, http.MethodPut, "/api/accounts/task-scheduler", nil, body, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// upstreamQuery 拼 upstream_id 查询参数（nil = 默认分组）。
+func upstreamQuery(upstreamID *int) url.Values {
+	vals := url.Values{}
+	if upstreamID != nil {
+		vals.Set("upstream_id", strconv.Itoa(*upstreamID))
+	}
+	return vals
 }

@@ -27,9 +27,12 @@ type CreditsSnapshotAccount struct {
 	UID          string  `json:"uid"`
 	Credits      float64 `json:"credits"`       // 登记时刻的余额，不是实时值
 	RegisteredAt int64   `json:"registered_at"` // 登记时刻（epoch 秒）
-	// Known 表示这个 uid 现在**还**对应本机的一个账号。账号删掉后历史快照仍在，
-	// 对账脚本可据 known=false 把它排除，或反过来当作"曾经存在"的凭据。
+	// Known 表示这个 uid 还对应本机的一个账号。v2.11 起返回的每一行都是 true
+	// ——已删账号的登记不再下发（去重口径见 TotalRegistered）。
 	Known bool `json:"known"`
+	// Active 表示这个账号现在**还能被调度**（未停用、令牌没过期）。
+	// 只有用 CreditsSnapshotInactive 才会看到 Active=false 的行。
+	Active bool `json:"active"`
 }
 
 // CreditsSnapshot 是 GET /api/accounts/credits-snapshot 的返回。
@@ -37,10 +40,14 @@ type CreditsSnapshotAccount struct {
 // **只读本地记录，不触发任何上游查询**：数字是面板上次记下来的，可能是几小时前
 // 的。要实时余额请用 Accounts.RefreshCredits（那会真的打腾讯接口，且要管理员）。
 type CreditsSnapshot struct {
-	SnapshotAt int64                    `json:"snapshot_at"` // 最新一条的登记时刻
-	Count      int                      `json:"count"`
-	KnownCount int                      `json:"known_count"`
-	Accounts   []CreditsSnapshotAccount `json:"accounts"`
+	SnapshotAt int64 `json:"snapshot_at"` // 最新一条的登记时刻
+	Count      int   `json:"count"`
+	KnownCount int   `json:"known_count"`
+	// ActiveCount 是其中还能被调度的账号数。
+	ActiveCount int `json:"active_count"`
+	// TotalRegistered 是登记表里的总行数（含已删除账号的残留），用于对账。
+	TotalRegistered int                      `json:"total_registered"`
+	Accounts        []CreditsSnapshotAccount `json:"accounts"`
 }
 
 // AccountUploadFile 是批量导入时的一个待上传文件。

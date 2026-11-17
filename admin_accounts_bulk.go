@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/url"
 	"strconv"
 )
 
@@ -77,11 +78,27 @@ func (s *AccountsService) AdminAPIStatus(ctx context.Context, upstreamID *int) (
 
 // CreditsSnapshot 读取面板已登记的积分快照（只读，不触发任何上游查询）。
 //
-// 快照跨全部分组、按 uid 登记；账号删掉后历史记录仍在，用 Known 区分。
-// 数字是「已登记」的，不是实时余额 —— 要实时值用 RefreshCredits。
+// 只返回**当前还在、且还能被调度**的账号：按 uid / 按域汇总出来的余额因此是
+// 实际可花的量（v2.11 起停用与令牌过期的账号默认排除，要连它们一起看用
+// CreditsSnapshotInactive）。数字是「已登记」的，不是实时余额 —— 要实时值用
+// RefreshCredits。
 func (s *AccountsService) CreditsSnapshot(ctx context.Context) (*CreditsSnapshot, error) {
+	return s.creditsSnapshot(ctx, false)
+}
+
+// CreditsSnapshotInactive 同上，但**连已停用 / 令牌过期的账号一起返回**
+// （每行带 Active 标明）。
+func (s *AccountsService) CreditsSnapshotInactive(ctx context.Context) (*CreditsSnapshot, error) {
+	return s.creditsSnapshot(ctx, true)
+}
+
+func (s *AccountsService) creditsSnapshot(ctx context.Context, includeInactive bool) (*CreditsSnapshot, error) {
+	q := url.Values{}
+	if includeInactive {
+		q.Set("include_inactive", "true")
+	}
 	var out CreditsSnapshot
-	if _, err := s.c.doJSON(ctx, http.MethodGet, "/api/accounts/credits-snapshot", nil, nil, &out); err != nil {
+	if _, err := s.c.doJSON(ctx, http.MethodGet, "/api/accounts/credits-snapshot", q, nil, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil

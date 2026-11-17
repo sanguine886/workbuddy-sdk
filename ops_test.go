@@ -72,7 +72,7 @@ func TestOpsServicesContract(t *testing.T) {
 			body = `{"models":[{"id":"glm-5.2","name":"GLM-5.2","efforts":["high"]}],"source":"none","summary":{"total":1},"realm":"cn"}`
 		case "/api/playground/models":
 			body = `{"models":[{"id":"glm-5.2","name":"GLM-5.2","efforts":["high"],"series":"glm"}],"source":"none","realm":"global"}`
-		case "/api/status":
+		case "/api/upstream/status":
 			body = `{"connected":false,"realm_totals":{"cn":{"total":0,"healthy":0}}}`
 		default:
 			body = `{}`
@@ -241,6 +241,9 @@ func TestOpsServicesContract(t *testing.T) {
 	st, err := c.Upstream().Status(ctx)
 	if err != nil {
 		t.Fatalf("Upstream.Status: %v", err)
+	}
+	if p := lastPath(t, recs); p != "/api/upstream/status" {
+		t.Fatalf("upstream status path = %q", p)
 	}
 	if st.Connected || st.RealmTotals["cn"].Total != 0 {
 		t.Fatalf("UpstreamStatus decode: %+v", st)

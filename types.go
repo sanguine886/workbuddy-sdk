@@ -53,7 +53,10 @@ type Account struct {
 	// Source: "file" 来自 auths/ 目录；"pool" 来自上游 /status。
 	Source string `json:"source"`
 
-	InPool        *bool  `json:"in_pool"`
+	InPool *bool `json:"in_pool"`
+	// Deprecated: 服务端**不返回**这个字段 —— `poolUnknown` 是前端自己算出来的
+	// （web/lib/account-status.ts：本次没取到上游状态时把 in_pool 置空并标 true）。
+	// 因此这里永远是 nil。要判断「看不到上游」，看 AccountsResponse.PoolAvailable。
 	PoolUnknown   *bool  `json:"poolUnknown"`
 	InvalidReason string `json:"invalid_reason"`
 
@@ -66,6 +69,22 @@ type Account struct {
 	Realm            Realm  `json:"realm"`
 	CheckinSupported *bool  `json:"checkin_supported"`
 	Domain           string `json:"domain"`
+
+	// AddedAt 是本面板记录的添加时间（Unix 秒）；拷贝来的账号可能未知。
+	AddedAt *int64 `json:"added_at,omitempty"`
+	// RefreshRisk 是刷新保护状态（被限流 / 需人工复核）。
+	RefreshRisk *RefreshRisk `json:"refresh_risk,omitempty"`
+}
+
+// RefreshRisk 是账号的刷新保护状态。
+type RefreshRisk struct {
+	// Until 是保护到什么时候（Unix 秒）。
+	Until         int64 `json:"until"`
+	LastFailureAt int64 `json:"last_failure_at"`
+	Failures      int   `json:"failures"`
+	NeedsReview   bool  `json:"needs_review"`
+	RetryAfterSec int   `json:"retry_after_sec"`
+	Paused        bool  `json:"paused"`
 }
 
 // AccountsResponse 是 GET /api/accounts 的返回。
@@ -273,8 +292,16 @@ type ApiKey struct {
 	UsedTokens  int64    `json:"used_tokens"`
 	QuotaCredit float64  `json:"quota_credit"` // 积分配额；0 = 不限
 	UsedCredit  float64  `json:"used_credit"`
-	CreatedAt   int64    `json:"created_at"`
-	LastUsedAt  *int64   `json:"last_used_at"`
+	// DailyQuota 是每日 token 限额；0 = 不限（与 Quota 各自独立，任一超限即拒绝）。
+	DailyQuota int64 `json:"daily_quota"`
+	// DailyUsedTokens 是今天（服务器本地日期）已用的 token，次日 0 点归零。
+	DailyUsedTokens int64 `json:"daily_used_tokens"`
+	// UpstreamID 是绑定的上游接入点；nil = 默认上游（默认上游不是库里的一行）。
+	UpstreamID *int `json:"upstream_id,omitempty"`
+	// PacketID 是来源红包的 id；nil = 手工建的。
+	PacketID   *int   `json:"packet_id"`
+	CreatedAt  int64  `json:"created_at"`
+	LastUsedAt *int64 `json:"last_used_at"`
 
 	// Key 是明文密钥，**仅在创建时返回一次**。
 	Key string `json:"key,omitempty"`
