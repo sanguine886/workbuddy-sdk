@@ -91,8 +91,8 @@ type AccountUploadResult struct {
 
 // ProbeModelsIn 是 POST /api/accounts/probe-models 的请求体。
 //
-// Accounts 传账号文件名；Models 传模型名。服务端限制：账号 ≤ 10、模型 ≤ 30、
-// 组合 ≤ 60（超了 400）。同账号内串行且每条间隔 600ms，不同账号最多 4 路并发，
+// Accounts 传账号文件名；Models 传模型名。服务端限制：**账号 ≤ 20、模型 ≤ 10、
+// 组合 ≤ 60**（超了 400）。同账号内串行且每条间隔 600ms，不同账号最多 4 路并发，
 // 因此这个调用**可能耗时数十秒**，ctx 超时要留够。
 type ProbeModelsIn struct {
 	Accounts []string `json:"accounts"`
@@ -112,6 +112,14 @@ type ProbeModelRow struct {
 	Code      *int   `json:"code"` // 上游业务码；null = 没拿到
 	Message   string `json:"message"`
 	LatencyMS int    `json:"latency_ms"`
+
+	// 下面三个是「探测结果同步给上游网关」的情况（v2.11 新增）：
+	// 探测出某个模型不可用之后，面板会把这个结论写进上游，免得别的请求再撞。
+	// GatewaySynced 为 true 表示同步成功；GatewaySyncSkipped 为 true 表示
+	// 无需同步（例如探测本来就成功）；Message 是失败原因。
+	GatewaySynced      *bool  `json:"gateway_synced,omitempty"`
+	GatewaySyncSkipped *bool  `json:"gateway_sync_skipped,omitempty"`
+	GatewaySyncMessage string `json:"gateway_sync_message,omitempty"`
 }
 
 // ProbeModelsSummary 是按 Status 分类的计数。

@@ -141,7 +141,7 @@ func (a *PasswordAuth) loginLocked(ctx context.Context) error {
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("wbsdk: 登录失败: %w", newAPIError(resp.StatusCode, raw))
+		return fmt.Errorf("wbsdk: 登录失败: %w", newAPIErrorWithHeader(resp.StatusCode, raw, resp.Header))
 	}
 
 	cookie := ""

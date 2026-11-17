@@ -191,10 +191,10 @@ c := wbsdk.NewClient(base,
 
 | 服务 | 方法 |
 |---|---|
-| `Accounts()` | `List` `StartAuth` `PollAuth` `Checkin` `CheckinAll` `Credits` `RefreshCredits` `SetDisabled` `SetNote` `SetProxy` `SetWeight` `ForceCooling` `Move` `Test` `Refresh` `ClearCooling` `Delete` `CheckinLogs` `ClearCheckinLogs` `TaskLogs` `CollectTaskLogs` `ClearTaskLogs` `UpstreamLogs` `Restart` `Export`（仅会话）`Upload` `AdminAPIStatus` `CreditsSnapshot` `ProbeModels` `RefreshTokens` `RefreshPlan` `SaveRefreshPlan` `RunRefreshPlan` `ClaimCompensation` `DailyPlan` `SaveDailyPlan` `RunDailyTask` `Order` `SaveOrder` `TaskScheduler` `KeepTaskScheduler` |
+| `Accounts()` | `List` `StartAuth` `StartAuthFor`（定向重登）`PollAuth` `Checkin` `CheckinAll` `Credits` `RefreshCredits` `RefreshCredit` `SetDisabled` `SetNote` `SetProxy` `SetWeight` `ForceCooling` `Move` `Test` `Refresh` `ClearCooling` `ClearCoolingDetail` `Delete` `CheckinLogs` `ClearCheckinLogs` `TaskLogs` `CollectTaskLogs` `ClearTaskLogs` `UpstreamLogs` `Restart` `Export`（仅会话）`Upload` `AdminAPIStatus` `CreditsSnapshot` `CreditsSnapshotInactive` `ProbeModels` `RefreshTokens` `RefreshPlan` `SaveRefreshPlan` `RunRefreshPlan` `ClaimCompensation` `DailyPlan` `SaveDailyPlan` `RunDailyTask` `Order` `SaveOrder` `TaskScheduler` `KeepTaskScheduler` |
 | `AccountRisk()` | `List` `Acknowledge` `Resume`（账号风险预警；`Resume` 解不掉时服务端回 409） |
 | `Keys()` | `List` `Create` `Update` `Delete` `ResetUsage` `CheckModels` `Export` `LocalImportStatus` `DetectLocalClient` `ImportLocal` `Reveal`（取回明文） |
-| `Stats()` | `Summary` `Daily` `Hourly` `CreditsFlow` `ByModel` `ByKey` `Upstream` `RepairUsage` `RebuildUsage` `ByAccount` `ByAccountModel` |
+| `Stats()` | `Summary` `Daily` `Hourly` `CreditsFlow` `ByModel` `ByKey` `Upstream` `RepairUsage` `RebuildUsage` `ByAccount` `ByAccountModel`，以及带自定义日期区间的 `DailyRange` `CreditsFlowRange` `ByModelRange` `ByKeyRange` |
 | `Logs()` | `List` `Clear` `AccountBackfill`（账号列为何是空的） |
 | `Security()` | `Config` `SaveConfig` `Rules` `AddRule` `RemoveRule` `Logs` `ClearLogs` |
 | `Settings()` | `Upstream` `SaveUpstream` `TestUpstash` `ReloadState` `ReloadUpstream` `ModelMap` `SaveModelMap` `GitHubToken` `SaveGitHubToken` `GitHubMirror` `SaveGitHubMirror` `Pricing` `SavePricing` `GatewayCORS` `SaveGatewayCORS` `AutoUpdate` `SaveAutoUpdate` |
@@ -216,6 +216,14 @@ c := wbsdk.NewClient(base,
 
 > 两个别名路径（网关同时注册的 `/v2/chat/completions`、以及 baseURL 不含 `/v1`
 > 时的 `/responses`）未做成具名方法，需要时用 `Do` / `DoStream` 直接调用即可。
+
+### 错误归一化
+
+非 2xx 一律归一化成 `*APIError`（`StatusCode` / `Code` / `Message` / `Hint` /
+`Raw` / **`RetryAfter`**）。`RetryAfter` 是 `Retry-After` 头换算出的秒数（0 =
+没有该头）：429 会带它，据此退避比固定间隔准。401 / 403 / 404 / 429 另有
+`AuthError` / `PermissionError` / `NotFoundError` / `QuotaError` 包装，
+用 `errors.As` 或 `errors.Is(wbsdk.ErrNotFound)` 都能取到。
 
 > **v2.11 的路径迁移**：上游运行时状态从 `/api/status` 搬到了
 > `/api/upstream/status`——旧地址让给了客户端余额协议的公开元数据端点。

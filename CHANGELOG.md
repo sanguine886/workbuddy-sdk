@@ -39,6 +39,17 @@
 - **账号积分快照**（`Accounts()`）：`CreditsSnapshotInactive`（连停用 / 令牌过期
   的账号一起返回，每行带 `Active`）、`RefreshCredit`（只刷新一个账号文件）。
   原有的 `CreditsSnapshot` / `RefreshCredits` 签名不变。
+- **账号定向重登**（`Accounts()`）：`StartAuthFor(ctx, realm, uid)` —— 对已存在的
+  账号刷新凭证，版本跟随目标账号（传的 realm 被忽略）。旧 `StartAuth` 不带 uid，
+  行为不变。返回值新增 `AuthStart.Target`（这次刷的是谁）。
+- **清除冷却的明细**（`Accounts()`）：`ClearCoolingDetail` —— 返回走的是在线清除
+  （`Online` / `Models` / `Unfrozen`）还是离线清除（`StateFile` / `Backup` /
+  `Before`）。旧 `ClearCooling` 保持不变。
+- **统计的自定义日期区间**（`Stats()`）：`DailyRange` / `CreditsFlowRange` /
+  `ByModelRange` / `ByKeyRange` + `DateRange`（`YYYY-MM-DD`，**两端都含**）。
+  只有 Start / End 都填才生效；只填一个会被服务端忽略并退回 `days` 口径。
+- **`APIError.RetryAfter`**：429 的 `Retry-After` 头换算成秒数（0 = 没有该头）。
+  服务端会把上游文案里的「将在 … 重置」算成秒数，据此退避比固定间隔准。
 
 ### 变更
 
@@ -51,12 +62,22 @@
   `RequestLog.Account/Effort/Channel/Cost`、`UsagePoint.Cost/UnpricedRequests/
   Success`、`UsageBreakdown.Cost/UnpricedRequests/TokensPerSec/
   ThroughputSamples`、`StatsSummary.*Cost/*Unpriced/CostCurrency`、
-  `UsageHourPoint.Success`、`ApiKey.DailyQuota/DailyUsedTokens/UpstreamID/
-  PacketID`、`Account.AddedAt/RefreshRisk`、`KeyUsage.DailyTokens`、
-  `CreditsSnapshot.ActiveCount/TotalRegistered`。
+  `UsageHourPoint.Cost/UnpricedRequests/Success`、`ApiKey.DailyQuota/
+  DailyUsedTokens/UpstreamID/PacketID`、`Account.AddedAt/RefreshRisk`、
+  `KeyUsage.DailyTokens`、`CreditsSnapshot.ActiveCount/TotalRegistered`、
+  `AuthPoll.ExpectedUID/ExpectedName/Revive`、`ProbeModelRow.GatewaySynced/
+  GatewaySyncSkipped/GatewaySyncMessage`、`ProxyProbe.Hint`、
+  `CreditsFlow.Granularity/Hourly`，以及**请求侧**的 `KeyIn.DailyQuota` /
+  `KeyPatch.DailyQuota`。
 - `Account.PoolUnknown` 标记 **Deprecated**：它从来不是服务端字段（`poolUnknown`
   是前端 `account-status.ts` 自己算的），所以一直是 nil。判断「看不到上游」请用
   `AccountsResponse.PoolAvailable`。
+- `AuthPoll` 的两个旧字段订正：`Status` 的取值里 **`realm_mismatch` 不存在**（两版
+  上游都搜不到该字符串），真正新增的是 `account_mismatch`（定向重登扫错账号）；
+  `Expected` / `Got` 标记 **Deprecated** —— 上游从来没有这两个键，一直是空串，
+  判断扫错账号请用 `Status == "account_mismatch"` + `ExpectedUID`。
+- `ProbeModelsIn` 的注释订正：服务端上限是**账号 ≤ 20、模型 ≤ 10、组合 ≤ 60**
+  （旧注释写的「账号 ≤ 10、模型 ≤ 30」从 v2.10.2 起就不对）。
 - `Accounts().CreditsSnapshot` 的**服务端**语义变了：默认只返回当前还能被调度的
   账号（停用 / 令牌过期的默认排除），已删账号的登记不再下发。要全量用
   `CreditsSnapshotInactive`；对账时用 `TotalRegistered` 对比登记表总行数。
@@ -68,6 +89,14 @@
   文件名取自服务端的 `Content-Disposition`。
 - 监控的 `TestMail` / `TestQQ` / `TestLLM` 接受**表单当前值**（不落库），
   传 nil 表示用已保存的配置——测试用的是「还没保存也能验」的那份值。
+- **上游行为变化（本库不代劳，但要知情）**：
+  - 11102 / `service info not found` 从 5xx 改判 **404** `model_not_found`，
+    于是会命中 `NotFoundError` 而不是 `*APIError`（按 5xx 重试的调用方要改）。
+  - 429 现在带 `Retry-After`（见上）。
+  - 未锁定版本的密钥，**裸模型名白名单**从「只匹配国内版」改为「允许同名模型的
+    任意版本」；显式 `cn:` / `global:` 仍只放行对应版本。已锁版本的密钥不变。
+  - `/v1/models` 的国内版 id 不再带 `cn:` 前缀（`global:` 保留），按前缀做匹配的
+    调用方需自行适配。
 
 ## [0.3.0] - 2026-10-20
 

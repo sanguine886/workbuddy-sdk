@@ -100,21 +100,60 @@ type AuthStart struct {
 	State   string `json:"state"`
 	AuthURL string `json:"authUrl"`
 	Realm   Realm  `json:"realm"`
+	// Target 只在**定向重登**（StartAuthFor 传了 uid）时返回：这次要刷的是哪个账号。
+	// 此时 Realm 跟随目标账号，调用方传的 realm 被忽略。
+	Target *AuthTarget `json:"target,omitempty"`
+}
+
+// AuthTarget 是定向重登的目标账号。
+type AuthTarget struct {
+	UID           string `json:"uid"`
+	File          string `json:"file"`
+	Nickname      string `json:"nickname"`
+	Realm         Realm  `json:"realm"`
+	PanelDisabled bool   `json:"panel_disabled"`
 }
 
 // AuthPoll 是 GET /api/auth/poll 的返回。
 //
-// Status 取值：waiting | success | expired | invalid | realm_mismatch。
+// Status 取值：waiting | success | expired | invalid | account_mismatch。
+// `account_mismatch` 是**定向重登**扫错了账号：不会落盘，看 ExpectedUID /
+// ExpectedName 与 UID / Nickname 的差别。
 type AuthPoll struct {
-	Status     string `json:"status"`
-	UID        string `json:"uid"`
-	Nickname   string `json:"nickname"`
-	Updated    bool   `json:"updated"`
-	Realm      Realm  `json:"realm"`
-	File       string `json:"file"`
+	Status   string `json:"status"`
+	UID      string `json:"uid"`
+	Nickname string `json:"nickname"`
+	Updated  bool   `json:"updated"`
+	Realm    Realm  `json:"realm"`
+	File     string `json:"file"`
+	// RegionNote 是国际版新号的地区注册提示。
 	RegionNote string `json:"region_note"`
-	Expected   string `json:"expected"`
-	Got        string `json:"got"`
+	// ExpectedUID / ExpectedName 是定向重登里**期望**的账号（account_mismatch 时会出现）。
+	ExpectedUID  string `json:"expected_uid"`
+	ExpectedName string `json:"expected_name"`
+	// Revive 是重登后自动解禁的结果（只有成功且该账号被面板停用过才有）。
+	Revive *AccountRevive `json:"revive,omitempty"`
+
+	// Deprecated: 上游从来没有 Expected / Got 这两个键（两版都搜不到），
+	// 一直是空串。判断扫错账号请用 Status == "account_mismatch" + ExpectedUID。
+	Expected string `json:"expected"`
+	Got      string `json:"got"`
+}
+
+// AccountRevive 是「重新登录后自动解禁」的结果。
+//
+// 登录在语义上就是「刷新账号状态」：凭证是全新的，上游那句「需重新登录」的
+// 禁用理由已经消失，所以面板会顺手把它放回池里。
+type AccountRevive struct {
+	// Attempted 表示是否真的尝试了（没被面板停用就不必尝试）。
+	Attempted bool `json:"attempted"`
+	// OK 表示解禁成功。
+	OK bool `json:"ok"`
+	// StillDisabled 三态：true 仍禁用 / false 已回池 / nil 读不到上游状态。
+	StillDisabled *bool `json:"still_disabled"`
+	// Pending 表示上游还没重载完，稍后会自动生效。
+	Pending *bool  `json:"pending"`
+	Message string `json:"message"`
 }
 
 // CheckinResult 是单个账号签到（POST .../checkin）的返回。
@@ -316,7 +355,9 @@ type KeyIn struct {
 	Models      []string `json:"models,omitempty"`
 	Quota       int      `json:"quota,omitempty"`
 	QuotaCredit float64  `json:"quota_credit,omitempty"`
-	Realm       Realm    `json:"realm,omitempty"`
+	// DailyQuota 是每日 token 限额（0 = 不限；与 Quota 各自独立，任一超限即拒绝）。
+	DailyQuota int   `json:"daily_quota,omitempty"`
+	Realm      Realm `json:"realm,omitempty"`
 }
 
 // KeyPatch 是更新密钥的请求体（PATCH 语义：仅提交非 nil 的字段）。
@@ -329,7 +370,9 @@ type KeyPatch struct {
 	Models      *[]string `json:"models,omitempty"`
 	Quota       *int      `json:"quota,omitempty"`
 	QuotaCredit *float64  `json:"quota_credit,omitempty"`
-	Realm       *Realm    `json:"realm,omitempty"`
+	// DailyQuota 是每日 token 限额。**必须用指针**：nil = 不改，0 = 改成不限。
+	DailyQuota *int   `json:"daily_quota,omitempty"`
+	Realm      *Realm `json:"realm,omitempty"`
 }
 
 // WhitelistCheck 是模型白名单校验的结果。
@@ -338,4 +381,30 @@ type WhitelistCheck struct {
 	Checked bool     `json:"checked"`
 	Unknown []string `json:"unknown"`
 	Reason  string   `json:"reason,omitempty"`
+}
+
+// ClearCoolingResult 是 POST /api/accounts/{file}/clear-cooling 的返回。
+//
+// 两条路径的明细不同，字段全部可选（见 ClearCoolingDetail 的说明）。
+type ClearCoolingResult struct {
+	OK      bool   `json:"ok"`
+	Message string `json:"message"`
+	UID     string `json:"uid"`
+
+	// ── 在线清除（不停上游）──
+	// Online=true 表示走上游管理接口清掉的，没有重启。
+	Online *bool `json:"online,omitempty"`
+	// Models 是在线清掉的模型级限流名单（原因为 11102 的误标）。
+	Models []string `json:"models,omitempty"`
+	// Unfrozen 表示是否顺带解除了面板写入的强制冷却。
+	Unfrozen *bool `json:"unfrozen,omitempty"`
+
+	// ── 离线清除（停上游 → 改 state.json → 启上游）──
+	// StateFile 是改到的上游状态文件；账号还没进 state.json 时为空。
+	StateFile string `json:"state_file,omitempty"`
+	// Backup 是改动前的备份文件路径（空 = 没备份）。
+	Backup string `json:"backup,omitempty"`
+	// Before 是被清掉的旧状态（until / reason / model_cooldowns /
+	// breaker_until / degrade_until）；账号原本没有持久化状态时为空对象。
+	Before map[string]any `json:"before,omitempty"`
 }

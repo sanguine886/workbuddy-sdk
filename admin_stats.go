@@ -21,6 +21,26 @@ func realmQuery(realm Realm) url.Values {
 	return q
 }
 
+// DateRange 是自定义日期区间（`YYYY-MM-DD`），**两端都含**。
+//
+// 只有 Start / End **都填了**才生效（服务端要求成对）；只填一个会被忽略，
+// 退回按 Days 的口径。Start 晚于 End 会被服务端自动交换，跨度上限 3650 天。
+// 日期格式非法时**静默退回 Days 口径**（不报错）——别指望它替你校验输入。
+type DateRange struct {
+	Start string
+	End   string
+}
+
+// apply 把区间写进查询参数（两端都空则什么都不做，等于沿用 Days）。
+func (r DateRange) apply(q url.Values) bool {
+	if r.Start == "" || r.End == "" {
+		return false
+	}
+	q.Set("start", r.Start)
+	q.Set("end", r.End)
+	return true
+}
+
 // Summary 拉取总览。
 func (s *StatsService) Summary(ctx context.Context, realm Realm) (*StatsSummary, error) {
 	var out StatsSummary
@@ -227,4 +247,66 @@ func (s *StatsService) ByAccountModel(ctx context.Context, q AccountStatsQuery) 
 		return nil, err
 	}
 	return &out, nil
+}
+
+// ── 自定义日期区间（v2.11 新增 start / end 参数）──────────────
+//
+// 这四个方法与同名的不带 Range 版本**行为一致时等价**：不传区间就按 days
+// 的口径走。之所以另起名字而不是把既有签名改成 variadic —— 后者会让方法值
+// （`f := s.Daily`）与接口断言的类型变掉，属于不必要的不兼容。
+
+// DailyRange 按天聚合指定日期区间（两端都含）。
+func (s *StatsService) DailyRange(ctx context.Context, r DateRange, days int, realm Realm) ([]UsagePoint, error) {
+	q := realmQuery(realm)
+	if days > 0 {
+		q.Set("days", strconv.Itoa(days))
+	}
+	r.apply(q)
+	var out []UsagePoint
+	if _, err := s.c.doJSON(ctx, http.MethodGet, "/api/stats/daily", q, nil, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// CreditsFlowRange 拉取指定日期区间的积分收支。
+func (s *StatsService) CreditsFlowRange(ctx context.Context, r DateRange, days int, realm Realm) (*CreditsFlow, error) {
+	q := realmQuery(realm)
+	if days > 0 {
+		q.Set("days", strconv.Itoa(days))
+	}
+	r.apply(q)
+	var out CreditsFlow
+	if _, err := s.c.doJSON(ctx, http.MethodGet, "/api/stats/credits", q, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ByModelRange 按模型聚合指定日期区间。
+func (s *StatsService) ByModelRange(ctx context.Context, r DateRange, days int, realm Realm) ([]UsageBreakdown, error) {
+	q := realmQuery(realm)
+	if days > 0 {
+		q.Set("days", strconv.Itoa(days))
+	}
+	r.apply(q)
+	var out []UsageBreakdown
+	if _, err := s.c.doJSON(ctx, http.MethodGet, "/api/stats/by-model", q, nil, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// ByKeyRange 按密钥聚合指定日期区间。
+func (s *StatsService) ByKeyRange(ctx context.Context, r DateRange, days int, realm Realm) ([]UsageBreakdown, error) {
+	q := realmQuery(realm)
+	if days > 0 {
+		q.Set("days", strconv.Itoa(days))
+	}
+	r.apply(q)
+	var out []UsageBreakdown
+	if _, err := s.c.doJSON(ctx, http.MethodGet, "/api/stats/by-key", q, nil, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }

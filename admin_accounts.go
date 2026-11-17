@@ -38,7 +38,23 @@ func (s *AccountsService) List(ctx context.Context) (*AccountsResponse, error) {
 
 // StartAuth 发起扫码登录；realm 为空时使用客户端默认版本。
 func (s *AccountsService) StartAuth(ctx context.Context, realm Realm) (*AuthStart, error) {
+	return s.startAuth(ctx, realm, "")
+}
+
+// StartAuthFor 对一个**已存在的账号**发起定向重登（uid 为空时等价于 StartAuth）。
+//
+// 传了 uid 就是「刷新这个账号的凭证」，此时 **realm 被忽略**：版本跟随目标账号，
+// 而不是界面上切到的那个。返回体里的 Target 会告诉你是哪个账号。
+// uid 找不到时服务端回 404。
+func (s *AccountsService) StartAuthFor(ctx context.Context, realm Realm, uid string) (*AuthStart, error) {
+	return s.startAuth(ctx, realm, uid)
+}
+
+func (s *AccountsService) startAuth(ctx context.Context, realm Realm, uid string) (*AuthStart, error) {
 	body := map[string]string{"realm": string(s.c.effectiveRealm(realm))}
+	if uid != "" {
+		body["uid"] = uid
+	}
 	var out AuthStart
 	if _, err := s.c.doJSON(ctx, http.MethodPost, "/api/auth/start", nil, body, &out); err != nil {
 		return nil, err
@@ -159,9 +175,28 @@ func (s *AccountsService) Refresh(ctx context.Context, file string) (*ActionResu
 	return &out, nil
 }
 
-// ClearCooling 强制清除账号级冷却、熔断/降权与模型级限流（会重启一次上游）。
+// ClearCooling 强制清除账号级冷却、熔断/降权与模型级限流。
+//
+// 只取 ok / message；要看**走的是哪条路**（在线清除还是停上游改 state.json）
+// 用 ClearCoolingDetail。
 func (s *AccountsService) ClearCooling(ctx context.Context, file string) (*ActionResult, error) {
 	var out ActionResult
+	path := accountPath(file) + "/clear-cooling"
+	if _, err := s.c.doJSON(ctx, http.MethodPost, path, nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ClearCoolingDetail 同 ClearCooling，但把成功明细也返回。
+//
+// 两条路径的明细**不一样**，所以字段都是可选的：
+//   - 在线清除（不停上游，v2.11 起优先走这条）：Online=true + Models + Unfrozen；
+//   - 离线清除（停上游 → 改 state.json → 启上游）：StateFile + Backup + Before。
+//
+// 别假定离线那三个字段一定存在 —— v2.10 起在线分支就不再返回它们了。
+func (s *AccountsService) ClearCoolingDetail(ctx context.Context, file string) (*ClearCoolingResult, error) {
+	var out ClearCoolingResult
 	path := accountPath(file) + "/clear-cooling"
 	if _, err := s.c.doJSON(ctx, http.MethodPost, path, nil, nil, &out); err != nil {
 		return nil, err

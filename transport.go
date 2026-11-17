@@ -34,7 +34,7 @@ func (r *RawResponse) Err() error {
 	if r.OK() {
 		return nil
 	}
-	return wrapStatus(newAPIError(r.StatusCode, r.Body))
+	return wrapStatus(newAPIErrorWithHeader(r.StatusCode, r.Body, r.Header))
 }
 
 // Decode 把响应体按 JSON 解码到 v（仅应在 OK 时调用）。
@@ -73,7 +73,7 @@ func (c *Client) DoStream(ctx context.Context, method, path string, payload []by
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxRespBytes))
-		return wrapStatus(newAPIError(resp.StatusCode, raw))
+		return wrapStatus(newAPIErrorWithHeader(resp.StatusCode, raw, resp.Header))
 	}
 	return c.streamSSE(resp.Body, fn)
 }
@@ -317,7 +317,7 @@ func (c *Client) doJSON(ctx context.Context, method, path string, query url.Valu
 		return nil, err
 	}
 	if res.StatusCode >= 400 {
-		return res, wrapStatus(newAPIError(res.StatusCode, res.Body))
+		return res, wrapStatus(newAPIErrorWithHeader(res.StatusCode, res.Body, res.Header))
 	}
 	if out != nil && len(res.Body) > 0 {
 		if err := json.Unmarshal(res.Body, out); err != nil {
@@ -400,7 +400,7 @@ func (c *Client) doMultipart(ctx context.Context, path string, query url.Values,
 	}
 	res := &RawResponse{StatusCode: resp.StatusCode, Header: resp.Header, Body: raw}
 	if res.StatusCode >= 400 {
-		return res, wrapStatus(newAPIError(res.StatusCode, raw))
+		return res, wrapStatus(newAPIErrorWithHeader(res.StatusCode, raw, res.Header))
 	}
 	if out != nil && len(raw) > 0 {
 		if uerr := json.Unmarshal(raw, out); uerr != nil {
