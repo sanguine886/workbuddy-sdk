@@ -3,6 +3,7 @@ package wbsdk
 import (
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -25,6 +26,7 @@ type Client struct {
 	log        *slog.Logger
 
 	realm        atomic.Value // string
+	upstreamID   atomic.Int64 // 0 = 未设置
 	retry        *RetryPolicy
 	sseEventMode bool
 
@@ -70,6 +72,9 @@ func NewClient(baseURL string, opts ...Option) *Client {
 		timeout:      o.timeout,
 	}
 	c.realm.Store(string(o.realm))
+	if o.upstreamID != nil {
+		c.upstreamID.Store(int64(*o.upstreamID))
+	}
 	return c
 }
 
@@ -108,3 +113,24 @@ func (c *Client) Realm() Realm {
 
 // SetRealm 修改默认版本（并发安全，可在运行期调用）。
 func (c *Client) SetRealm(r Realm) { c.realm.Store(string(r)) }
+
+// UpstreamID 返回默认分组 id；0 = 未设置（服务端用默认分组）。
+func (c *Client) UpstreamID() int { return int(c.upstreamID.Load()) }
+
+// SetUpstreamID 修改默认分组（并发安全，运行期可切）。传 0 取消设置。
+func (c *Client) SetUpstreamID(id int) { c.upstreamID.Store(int64(id)) }
+
+// groupQ 拼 upstream_id：调用方显式给的优先，否则回落到客户端默认。
+//
+// 为什么要这个回落：上游**几乎每个账号级端点**都接受 `upstream_id`，多分组
+// 部署下不传就是「操作默认分组」。而错分组的症状极其误导——例如按文件名清
+// 冷却，服务端会去默认分组的目录里找那个文件，找不到就回 **404「账号文件
+// 不存在」**，看起来像账号被删了。
+func (c *Client) groupQ(id *int) url.Values {
+	if id == nil {
+		if v := c.UpstreamID(); v != 0 {
+			return groupQuery(&v)
+		}
+	}
+	return groupQuery(id)
+}

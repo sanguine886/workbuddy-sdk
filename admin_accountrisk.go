@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/http"
 	"net/url"
-	"strconv"
 )
 
 // AccountRiskService 封装账号风险预警（/api/account-risk）。
@@ -56,10 +55,7 @@ type AccountRiskList struct {
 
 // List 列出账号风险预警。
 func (s *AccountRiskService) List(ctx context.Context, q AccountRiskQuery) (*AccountRiskList, error) {
-	vals := url.Values{}
-	if q.UpstreamID != nil {
-		vals.Set("upstream_id", strconv.Itoa(*q.UpstreamID))
-	}
+	vals := s.c.groupQ(q.UpstreamID)
 	if q.AllGroups {
 		vals.Set("all_groups", "true")
 	}

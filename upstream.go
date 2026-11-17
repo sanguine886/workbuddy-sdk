@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/http"
 	"net/url"
-	"strconv"
 )
 
 // UpstreamService 封装上游状态与模型简表接口（/api/upstream/status、/api/models）。
@@ -24,12 +23,9 @@ func (s *UpstreamService) Status(ctx context.Context) (*UpstreamStatus, error) {
 
 // StatusOf 拉取指定分组的上游运行时状态（upstreamID 为 nil = 默认分组）。
 func (s *UpstreamService) StatusOf(ctx context.Context, upstreamID *int) (*UpstreamStatus, error) {
-	vals := url.Values{}
-	if upstreamID != nil {
-		vals.Set("upstream_id", strconv.Itoa(*upstreamID))
-	}
 	var out UpstreamStatus
-	if _, err := s.c.doJSON(ctx, http.MethodGet, "/api/upstream/status", vals, nil, &out); err != nil {
+	if _, err := s.c.doJSON(ctx, http.MethodGet, "/api/upstream/status",
+		s.c.groupQ(upstreamID), nil, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil

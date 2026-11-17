@@ -3,6 +3,7 @@ package wbsdk
 import (
 	"context"
 	"net/http"
+	"net/url"
 )
 
 // 余额端点：让客户端面板按统一单位显示密钥剩余额度。
@@ -67,6 +68,30 @@ type BalanceStatus struct {
 	Data    BalanceUnit `json:"data"`
 }
 
+// BalanceScope 是余额报哪个池的口径。
+//
+// 服务端对非法值**静默回落到 auto**，不报错（调用方是客户端面板）。
+type BalanceScope string
+
+const (
+	// ScopeAuto 让服务端决定：有上限的密钥报自己，否则按密钥 realm、
+	// 再按最近一次实际调用的 realm，最后合并。
+	ScopeAuto BalanceScope = ""
+	// ScopeCN 只报国内版的池。
+	ScopeCN BalanceScope = "cn"
+	// ScopeGlobal 只报国际版的池。
+	ScopeGlobal BalanceScope = "global"
+	// ScopeMerged 两版合并成一个数。
+	ScopeMerged BalanceScope = "merged"
+)
+
+func (s BalanceScope) query() url.Values {
+	if s == ScopeAuto {
+		return nil
+	}
+	return url.Values{"scope": []string{string(s)}}
+}
+
 // TokenUsage 查询**当前网关密钥**的剩余额度（GET /api/usage/token/）。
 //
 // 需要网关密钥（WithGatewayKey）。停用 / 过期 / 用尽都照常给数，不拦——
@@ -75,8 +100,18 @@ type BalanceStatus struct {
 // 这个调用**有副作用**：服务端会记一行请求日志（0 token）并刷新密钥的
 // 「最近使用」与来源 IP。
 func (c *Client) TokenUsage(ctx context.Context) (*TokenUsageResponse, error) {
+	return c.TokenUsageOf(ctx, ScopeAuto)
+}
+
+// TokenUsageOf 同 TokenUsage，但显式指定报哪个池。
+//
+// 注意 `scope` 只在密钥**没有**额度上限时影响数字：设了上限的密钥回答的是
+// 「我这把还能花多少」，服务端会忽略池口径直接报 merged——硬拆会得出
+// 「上限 100、池里剩 5000」这种自相矛盾的读数。
+func (c *Client) TokenUsageOf(ctx context.Context, scope BalanceScope) (*TokenUsageResponse, error) {
+	q := scope.query()
 	var out TokenUsageResponse
-	if _, err := c.doJSON(ctx, http.MethodGet, "/api/usage/token/", nil, nil, &out); err != nil {
+	if _, err := c.doJSON(ctx, http.MethodGet, "/api/usage/token/", q, nil, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -86,8 +121,14 @@ func (c *Client) TokenUsage(ctx context.Context) (*TokenUsageResponse, error) {
 //
 // RikkaHub 之类客户端默认配置成 {baseUrl}/credits 并把 data.total_usage 当余额显示。
 func (c *Client) Credits(ctx context.Context) (*CreditsResponse, error) {
+	return c.CreditsOf(ctx, ScopeAuto)
+}
+
+// CreditsOf 同 Credits，但显式指定报哪个池。
+func (c *Client) CreditsOf(ctx context.Context, scope BalanceScope) (*CreditsResponse, error) {
+	q := scope.query()
 	var out CreditsResponse
-	if _, err := c.doJSON(ctx, http.MethodGet, "/v1/credits", nil, nil, &out); err != nil {
+	if _, err := c.doJSON(ctx, http.MethodGet, "/v1/credits", q, nil, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil

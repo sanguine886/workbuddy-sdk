@@ -3,6 +3,7 @@ package wbsdk
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -171,6 +172,27 @@ type TapTurn struct {
 	Usage            json.RawMessage `json:"usage"`
 	TraceID          string          `json:"trace_id"`
 	Summary          *TapSummary     `json:"summary"`
+
+	// ── 两端视角（同一轮在网关两侧的两份报文）──────────────────
+	//
+	// `Request` / `Response` 是**上游那一跳**的样子；`ClientResponse` 才是
+	// 客户端真正收到的那份。对 Chat（透传）两者相同，对 Anthropic / Responses
+	// （要翻译）是两份不同的报文——只看 Response 会把翻译层的输出当成客户端
+	// 的输入，排障时得出完全相反的结论。
+	UpstreamResponse   json.RawMessage `json:"upstream_response"`
+	UpstreamResponseOK bool            `json:"upstream_response_ok"`
+	UpstreamRecon      json.RawMessage `json:"upstream_recon"`
+	// ClientResponse 在存量行（v2.11 之前抓的）上是 null。
+	ClientResponse    json.RawMessage `json:"client_response"`
+	ClientResponseOK  bool            `json:"client_response_ok"`
+	ClientResponseRaw *string         `json:"client_response_raw"`
+	ClientRecon       json.RawMessage `json:"client_recon"`
+	// Passthrough 表示这一跳没有翻译（Chat 协议，或客户端视角没采集到）。
+	Passthrough bool `json:"passthrough"`
+	// ClientProtocol 是解读 ClientResponse 用的协议（chat 透传时同 Protocol）。
+	ClientProtocol string `json:"client_protocol"`
+	// RequestDigest 是请求体的结构摘要（截断前算的），截断场景下的 diff 用它。
+	RequestDigest json.RawMessage `json:"request_digest"`
 }
 
 // TapDiffParam 是顶层参数的一处差异。
@@ -406,13 +428,24 @@ func (s *TapService) Diff(ctx context.Context, before, after int64) (*TapDiff, e
 
 // ExportSession 导出会话为**自包含 HTML**（服务端带 attachment 头，浏览器会
 // 当成文件下载而不是打开页面）。
+//
+// 响应体走的是 HTML 而不是 JSON，所以单独发 Accept: text/html。
 func (s *TapService) ExportSession(ctx context.Context, id int64) (*TapExport, error) {
-	res, err := s.c.doRaw(ctx, http.MethodGet, tapSessionPath(id)+"/export", nil, nil)
+	res, err := s.c.doRawAccept(ctx, http.MethodGet, tapSessionPath(id)+"/export",
+		nil, nil, acceptHTML)
 	if err != nil {
 		return nil, err
 	}
 	if res.StatusCode >= 400 {
-		return nil, wrapStatus(newAPIError(res.StatusCode, res.Body))
+		return nil, wrapStatus(newAPIErrorWithHeader(res.StatusCode, res.Body, res.Header))
+	}
+	// 响应体只读到 maxRespBytes 为止。正好读满说明**大概率被截断了** ——
+	// 一份半截的 HTML 比报错更糟：它会安静地少掉后半段对话，而调用方以为
+	// 拿到了完整文件。宁可在这里失败。
+	if len(res.Body) >= maxRespBytes {
+		return nil, fmt.Errorf(
+			"wbsdk: 导出的会话超过 %d MiB 上限（可能已被截断），请分批导出或直接从服务端取",
+			maxRespBytes>>20)
 	}
 	name := "workbuddy-trace.html"
 	if cd := res.Header.Get("Content-Disposition"); cd != "" {

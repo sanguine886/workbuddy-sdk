@@ -111,6 +111,46 @@ _ = admin.DoJSON(ctx, http.MethodGet, "/api/some/new/endpoint", nil, &out)
 自定义可自行实现 `AdminAuth` / `GatewayKey` 接口，通过 `WithAdminAuth` /
 `WithGatewayKey` 注入。
 
+### 多分组（`WithUpstreamID`）
+
+上游支持多分组（每组装一个独立的 workbuddy2api 实例、各有自己的账号目录）。
+**账号级接口几乎全部接受 `upstream_id`，不传就是操作默认分组。**
+
+```go
+c := wbsdk.NewClient(base, wbsdk.WithAdminLogin("admin", "***"),
+	wbsdk.WithUpstreamID(5)) // 之后所有账号级调用都作用于分组 5
+
+c.Accounts().Checkin(ctx, "workbuddy123.json") // 自动带上 ?upstream_id=5
+c.Accounts().Order(ctx, wbsdk.Ptr(9))          // 显式传的覆盖默认值
+c.SetUpstreamID(0)                             // 取消，回到默认分组
+```
+
+单分组部署不用管它。为什么要显式设：错分组的症状极其误导——按文件名清冷却时，
+服务端会去默认分组的目录里找那个文件，找不到就回 **404「账号文件不存在」**，
+看起来像账号被删了。数据面（`/v1/*`）不受影响：那边用哪个上游由密钥决定。
+
+### 局部更新：`nil` 与零值的区别
+
+有些配置接口是**局部合并**（以服务端当前值为底）：监控 `SaveConfig`、抓包
+`SaveConfig`、网关 CORS `SaveGatewayCORS`。它们的字段都是指针，语义固定：
+
+| 写法 | 含义 |
+|---|---|
+| `nil` | **不改**这一项 |
+| `wbsdk.Ptr("")` | 真的把它改成空串（例如清空已存的邮箱地址） |
+| `wbsdk.Ptr(false)` | 真的关掉它 |
+
+```go
+// 只关掉邮件通知，其余不动
+patch := wbsdk.WatchdogConfigPatch{Mail: &wbsdk.WatchdogMailPatch{Enabled: wbsdk.Ptr(false)}}
+// 清空已保存的 SMTP 密码
+patch = wbsdk.WatchdogConfigPatch{Mail: &wbsdk.WatchdogMailPatch{Password: wbsdk.Ptr("")}}
+```
+
+**例外：`Settings().SaveAutoUpdate` 是整体替换**（`AutoUpdateConfig` 用值类型），
+`interval_hours` / `window_start` / `window_end` 缺一个就 400。正确用法是先
+`AutoUpdate()` 读出来、改想要的字段、再整个传回去。
+
 ## 错误处理
 
 所有非 2xx 响应统一归一化为 `*APIError`（`StatusCode` / `Code` / `Message` /
@@ -181,8 +221,8 @@ c := wbsdk.NewClient(base,
 | `Messages` / `MessagesStream` | Anthropic Messages 协议透传 |
 | `Models` | 当前密钥可见的模型列表（已按版本与白名单裁剪） |
 | `Usage` | 当前密钥的用量与额度（`tokens` / `credits`，不限额度为 `null`） |
-| `TokenUsage` | 当前密钥的剩余额度（`/api/usage/token/`，**用网关密钥鉴权**） |
-| `Credits` | 客户端默认余额路径（`/v1/credits`，RikkaHub / new-api 两种口径） |
+| `TokenUsage` / `TokenUsageOf` | 当前密钥的剩余额度（`/api/usage/token/`，**用网关密钥鉴权**）；`*Of` 版可指定报哪个池（`ScopeCN` / `ScopeGlobal` / `ScopeMerged`） |
+| `Credits` / `CreditsOf` | 客户端默认余额路径（`/v1/credits`，RikkaHub / new-api 两种口径）；`*Of` 版同上 |
 | `BalanceStatus` | 余额的**公开**单位元数据（`/api/status`，无鉴权） |
 | `ToolsSearch` | 上游 web 搜索（`POST /v1/tools/search`，信封原样透传） |
 | `MessagesCountTokens` / `CountTokens` | Anthropic 的 token **估算**（`/v1/messages/count_tokens`，走完整鉴权；估算口径偏高） |
@@ -191,7 +231,7 @@ c := wbsdk.NewClient(base,
 
 | 服务 | 方法 |
 |---|---|
-| `Accounts()` | `List` `StartAuth` `StartAuthFor`（定向重登）`PollAuth` `Checkin` `CheckinAll` `Credits` `RefreshCredits` `RefreshCredit` `SetDisabled` `SetNote` `SetProxy` `SetWeight` `ForceCooling` `Move` `Test` `Refresh` `ClearCooling` `ClearCoolingDetail` `Delete` `CheckinLogs` `ClearCheckinLogs` `TaskLogs` `CollectTaskLogs` `ClearTaskLogs` `UpstreamLogs` `Restart` `Export`（仅会话）`Upload` `AdminAPIStatus` `CreditsSnapshot` `CreditsSnapshotInactive` `ProbeModels` `RefreshTokens` `RefreshPlan` `SaveRefreshPlan` `RunRefreshPlan` `ClaimCompensation` `DailyPlan` `SaveDailyPlan` `RunDailyTask` `Order` `SaveOrder` `TaskScheduler` `KeepTaskScheduler` |
+| `Accounts()` | `List` `StartAuth` `StartAuthIn`（含地区 / 分组 / 线路）`StartAuthFor`（定向重登）`PollAuth` `PollAuthIn` `Checkin` `CheckinAll` `Credits` `RefreshCredits` `RefreshCredit` `SetDisabled` `SetNote` `SetProxy` `SetWeight` `ForceCooling` `Move` `Test` `Refresh` `ClearCooling` `ClearCoolingDetail` `Delete` `CheckinLogs` `ClearCheckinLogs` `TaskLogs` `CollectTaskLogs` `ClearTaskLogs` `UpstreamLogs` `Restart` `Export`（仅会话）`Upload` `AdminAPIStatus` `CreditsSnapshot` `CreditsSnapshotInactive` `ProbeModels` `RefreshTokens` `RefreshPlan` `SaveRefreshPlan` `RunRefreshPlan` `ClaimCompensation` `DailyPlan` `SaveDailyPlan` `RunDailyTask` `Order` `SaveOrder` `TaskScheduler` `KeepTaskScheduler` |
 | `AccountRisk()` | `List` `Acknowledge` `Resume`（账号风险预警；`Resume` 解不掉时服务端回 409） |
 | `Keys()` | `List` `Create` `Update` `Delete` `ResetUsage` `CheckModels` `Export` `LocalImportStatus` `DetectLocalClient` `ImportLocal` `Reveal`（取回明文） |
 | `Stats()` | `Summary` `Daily` `Hourly` `CreditsFlow` `ByModel` `ByKey` `Upstream` `RepairUsage` `RebuildUsage` `ByAccount` `ByAccountModel`，以及带自定义日期区间的 `DailyRange` `CreditsFlowRange` `ByModelRange` `ByKeyRange` |

@@ -33,7 +33,7 @@ func newReplay(t *testing.T, handlers map[string]func(w http.ResponseWriter, r *
 // 余额端点：/api/status 是**公开**元数据；/api/usage/token/ 挂在 /api 下但
 // 鉴权用的是网关密钥（不是管理面会话）。
 func TestBalanceAuthRouting(t *testing.T) {
-	var gotAuth string
+	var gotAuth, gotQuery string
 	srv, _ := newReplay(t, map[string]func(http.ResponseWriter, *http.Request){
 		"/api/status": func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
@@ -43,6 +43,7 @@ func TestBalanceAuthRouting(t *testing.T) {
 		},
 		"/api/usage/token/": func(w http.ResponseWriter, r *http.Request) {
 			gotAuth = r.Header.Get("Authorization")
+			gotQuery = r.URL.RawQuery
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = io.WriteString(w, `{"code":true,"data":{"object":"token_usage",`+
 				`"unlimited_quota":false,"total_granted":10,"total_used":3,`+
@@ -96,6 +97,22 @@ func TestBalanceAuthRouting(t *testing.T) {
 	if cr.Data.TotalUsage != 7 || cr.Data.TotalAvailable != 7 {
 		t.Fatalf("Credits decode: %+v", cr)
 	}
+
+	// scope 口径：显式给了才拼参数，ScopeAuto 不拼（服务端自己决定）。
+	gotQuery = ""
+	if _, err := g.TokenUsageOf(ctx, ScopeGlobal); err != nil {
+		t.Fatalf("TokenUsageOf: %v", err)
+	}
+	if gotQuery != "scope=global" {
+		t.Fatalf("TokenUsageOf query = %q, 期望 scope=global", gotQuery)
+	}
+	gotQuery = ""
+	if _, err := g.CreditsOf(ctx, ScopeAuto); err != nil {
+		t.Fatalf("CreditsOf: %v", err)
+	}
+	if gotQuery != "" {
+		t.Fatalf("ScopeAuto 不该带 scope 参数，实得 %q", gotQuery)
+	}
 }
 
 // 监控（/api/watchdog）：路径与打码值的处理。
@@ -135,9 +152,9 @@ func TestWatchdogEndpoints(t *testing.T) {
 
 	// 测试端点用**表单当前值**（不落库）：请求体带 base_url / api_key / umo。
 	qq, err := c.Watchdog().TestQQ(ctx, &WatchdogQQPatch{
-		BaseURL: "https://astrbot.invalid",
-		APIKey:  "abk_x",
-		UMO:     "qq_official:GroupMessage:123",
+		BaseURL: Ptr("https://astrbot.invalid"),
+		APIKey:  Ptr("abk_x"),
+		UMO:     Ptr("qq_official:GroupMessage:123"),
 	})
 	if err != nil {
 		t.Fatalf("TestQQ: %v", err)
@@ -256,6 +273,34 @@ func TestStartAuthForSendsUID(t *testing.T) {
 	if st.Target == nil || st.Target.UID != "u9" || !st.Target.PanelDisabled {
 		t.Fatalf("target decode: %+v", st.Target)
 	}
+
+	// 国际版新号必须带 region，否则聊天报 14017；分组要跟到 query 上。
+	if _, err := c.Accounts().StartAuthIn(ctx, AuthStartIn{
+		Realm: RealmGlobal, Region: "HK", UpstreamID: Ptr(7),
+	}); err != nil {
+		t.Fatalf("StartAuthIn: %v", err)
+	}
+	b := lastBody(t, *recs)
+	if !strings.Contains(b, `"region":"HK"`) || !strings.Contains(b, `"realm":"global"`) {
+		t.Fatalf("StartAuthIn body = %s", b)
+	}
+	if q := lastQuery(t, *recs); q != "upstream_id=7" {
+		t.Fatalf("StartAuthIn query = %q", q)
+	}
+
+	// proxy 三态：nil 不写；Ptr("") 是显式切回默认线路，必须写进 body。
+	if _, err := c.Accounts().StartAuth(ctx, RealmCN); err != nil {
+		t.Fatalf("StartAuth: %v", err)
+	}
+	if b := lastBody(t, *recs); strings.Contains(b, "proxy") {
+		t.Fatalf("Proxy 为 nil 时不该带 proxy：%s", b)
+	}
+	if _, err := c.Accounts().StartAuthIn(ctx, AuthStartIn{Realm: RealmCN, Proxy: Ptr("")}); err != nil {
+		t.Fatalf("StartAuthIn(proxy): %v", err)
+	}
+	if b := lastBody(t, *recs); !strings.Contains(b, `"proxy":""`) {
+		t.Fatalf("Ptr(\"\") 必须写成 proxy:\\\"\\\"：%s", b)
+	}
 }
 
 // 统计的自定义区间：只有 start/end 都填才生效。
@@ -322,7 +367,7 @@ func TestClearCoolingDetailBothPaths(t *testing.T) {
 		chk  func(*testing.T, *ClearCoolingResult)
 	}{
 		{
-			name: "在线清���（不停上游）",
+			name: "在线清除（不停上游）",
 			body: `{"ok":true,"message":"已通过上游管理接口在线清除","uid":"u1",` +
 				`"online":true,"models":["glm-5.2"],"unfrozen":true}`,
 			chk: func(t *testing.T, r *ClearCoolingResult) {
@@ -363,5 +408,53 @@ func TestClearCoolingDetailBothPaths(t *testing.T) {
 			}
 			tc.chk(t, got)
 		})
+	}
+}
+
+// 分组：client 级默认值要给所有账号级端点补上 upstream_id，显式传的优先。
+func TestWithUpstreamID(t *testing.T) {
+	srv, recs := newReplay(t, nil)
+	ctx := context.Background()
+
+	// 未设置：不带 upstream_id（服务端用默认分组）。
+	c := NewClient(srv.URL, WithAdminCookie("wb_session=x"))
+	if _, err := c.Accounts().List(ctx); err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if q := lastQuery(t, *recs); q != "" {
+		t.Fatalf("未设默认分组时不该带参数，实得 %q", q)
+	}
+
+	// 设了默认分组：连按文件名操作的端点也要带上——错分组的报错是
+	// 「账号文件不存在」，会把人引到完全错误的方向。
+	g := NewClient(srv.URL, WithAdminCookie("wb_session=x"), WithUpstreamID(5))
+	if g.UpstreamID() != 5 {
+		t.Fatalf("UpstreamID() = %d", g.UpstreamID())
+	}
+	if _, err := g.Accounts().Checkin(ctx, "a.json"); err != nil {
+		t.Fatalf("Checkin: %v", err)
+	}
+	if q := lastQuery(t, *recs); q != "upstream_id=5" {
+		t.Fatalf("Checkin query = %q", q)
+	}
+	if p := (*recs)[len(*recs)-1].Path; p != "/api/accounts/a.json/checkin" {
+		t.Fatalf("Checkin path = %q", p)
+	}
+
+	// 显式传的覆盖默认值。
+	if _, err := g.Accounts().Order(ctx, Ptr(9)); err != nil {
+		t.Fatalf("Order: %v", err)
+	}
+	if q := lastQuery(t, *recs); q != "upstream_id=9" {
+		t.Fatalf("Order query = %q", q)
+	}
+
+	// 运行期切换也生效。
+	g.SetUpstreamID(11)
+	if _, err := g.Accounts().List(ctx); err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if q := lastQuery(t, *recs); q != "upstream_id=11" {
+		t.Fatalf("List query = %q", q)
 	}
 }

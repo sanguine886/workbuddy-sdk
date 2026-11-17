@@ -134,8 +134,11 @@ type PricingBand struct {
 
 // PricingModelTable 是一个模型的价目表。
 //
-// 服务端要求至少给 cache_miss 与 output 两档。
+// 服务端要求至少给 cache_miss 与 output 两档，cache_hit 可省。
 type PricingModelTable struct {
+	// Label 是面板上显示的模型名。服务端不校验它，但原样保存——丢了它
+	// 价目表里的模型只能显示成键名（如 deepseek-flash 而不是 DeepSeek-V4.1-Flash）。
+	Label     string       `json:"label,omitempty"`
 	CacheHit  *PricingBand `json:"cache_hit,omitempty"`
 	CacheMiss *PricingBand `json:"cache_miss,omitempty"`
 	Output    *PricingBand `json:"output,omitempty"`
@@ -238,10 +241,14 @@ type GatewayCORS struct {
 }
 
 // GatewayCORSPatch 是网关 CORS 的局部更新。
+//
+// Origins 用指针是因为「清空」是有意义的操作（等于关掉 CORS）：nil = 不改，
+// `Ptr([]string{})` = 清空。用值切片的话空切片会被 omitempty 吃掉，
+// 调用方会以为清空了而实际什么都没发生。
 type GatewayCORSPatch struct {
-	Enabled *bool    `json:"enabled,omitempty"`
-	Origins []string `json:"origins,omitempty"`
-	MaxAge  *int     `json:"max_age,omitempty"`
+	Enabled *bool     `json:"enabled,omitempty"`
+	Origins *[]string `json:"origins,omitempty"`
+	MaxAge  *int      `json:"max_age,omitempty"`
 }
 
 // GatewayCORS 读取网关 CORS 设置。
@@ -291,13 +298,23 @@ type AutoUpdateState struct {
 	PendingVersion string `json:"pending_version"`
 }
 
-// AutoUpdatePatch 是自动更新配置的局部更新。
-type AutoUpdatePatch struct {
-	Enabled       *bool  `json:"enabled,omitempty"`
-	IntervalHours *int   `json:"interval_hours,omitempty"`
-	WindowStart   *int   `json:"window_start,omitempty"`
-	WindowEnd     *int   `json:"window_end,omitempty"`
-	Target        string `json:"target,omitempty"`
+// AutoUpdateConfig 是自动更新的**完整**配置（用于保存）。
+//
+// 注意这个接口是**整体替换**，不是局部合并（与监控 / 抓包 / CORS 那几个不同）：
+// 服务端会直接拿请求体当新配置，`interval_hours` / `window_start` / `window_end`
+// 缺失即 400，其余字段缺失则回落到默认值而不是保持原值。
+//
+// 所以这里刻意用**值类型**而不是指针：形状上就不给人「可以只传一个字段」的
+// 错觉。正确用法是先 AutoUpdate() 读出来，改想要的字段，再整个传回去。
+type AutoUpdateConfig struct {
+	Enabled bool `json:"enabled"`
+	// IntervalHours 是检测间隔，1 ~ 168（7 天）。
+	IntervalHours int `json:"interval_hours"`
+	// WindowStart / WindowEnd 是动手的时间窗（服务器本地时间，0 ~ 23）。
+	WindowStart int `json:"window_start"`
+	WindowEnd   int `json:"window_end"`
+	// Target 取值 auto（连上游一起更新）| manager（只更新管理端）；空串等同 auto。
+	Target string `json:"target,omitempty"`
 }
 
 // AutoUpdate 读取自动更新配置与最近一次巡检结果。
@@ -309,13 +326,13 @@ func (s *SettingsService) AutoUpdate(ctx context.Context) (*AutoUpdate, error) {
 	return &out, nil
 }
 
-// SaveAutoUpdate 保存自动更新配置。
+// SaveAutoUpdate 保存自动更新配置（**整体替换**，见 AutoUpdateConfig）。
 //
 // 开启它等于授权面板在无人值守时自行下载并安装新版本、重启服务——因此服务端
-// 要求**会话管理员**（API Token 不行）。
-func (s *SettingsService) SaveAutoUpdate(ctx context.Context, patch AutoUpdatePatch) (*AutoUpdate, error) {
+// 要求**会话管理员**（API Token 会拿到 403）。
+func (s *SettingsService) SaveAutoUpdate(ctx context.Context, cfg AutoUpdateConfig) (*AutoUpdate, error) {
 	var out AutoUpdate
-	if _, err := s.c.doJSON(ctx, http.MethodPut, "/api/settings/auto-update", nil, patch, &out); err != nil {
+	if _, err := s.c.doJSON(ctx, http.MethodPut, "/api/settings/auto-update", nil, cfg, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil

@@ -48,6 +48,19 @@
 - **统计的自定义日期区间**（`Stats()`）：`DailyRange` / `CreditsFlowRange` /
   `ByModelRange` / `ByKeyRange` + `DateRange`（`YYYY-MM-DD`，**两端都含**）。
   只有 Start / End 都填才生效；只填一个会被服务端忽略并退回 `days` 口径。
+- **`Ptr[T]`**：`wbsdk.Ptr(v)` 返回 `v` 的指针。局部更新的请求体用 `nil` 表示
+  「不改」，用 `Ptr("")` / `Ptr(false)` 表示「真的改成零值」——这两件事在服务端
+  是**不同的动作**，值类型 + `omitempty` 表达不了后者。
+- **`WithUpstreamID(id)`**：设 client 级默认分组。上游几乎每个账号级端点都接受
+  `upstream_id`，不传就是操作**默认分组**；而错分组的症状常常是「账号文件不存在」
+  这种把人引向错误方向 404。显式传 `upstreamID` 的调用仍以参数为准，运行期可用
+  `SetUpstreamID` 切换。数据面（`/v1/*`）不受影响（由密钥决定上游）。
+- **`StartAuthIn` / `PollAuthIn`**（`Accounts()`）：发码 / 轮询的全参数版本，补上
+  `region`（国际版新号漏了它 → 落盘成功但随后聊天报 14017）、`upstream_id`
+  （否则账号写进默认分组）、`proxy`（写上游全局配置，`Ptr("")` 是切回默认线路）。
+  `StartAuth` / `StartAuthFor` / `PollAuth` 签名不变。
+- **`TokenUsageOf` / `CreditsOf`**：指定余额报哪个池（`ScopeAuto` / `ScopeCN` /
+  `ScopeGlobal` / `ScopeMerged`）。原方法等价于 `ScopeAuto`（不传 `scope`）。
 - **`APIError.RetryAfter`**：429 的 `Retry-After` 头换算成秒数（0 = 没有该头）。
   服务端会把上游文案里的「将在 … 重置」算成秒数，据此退避比固定间隔准。
 
@@ -81,6 +94,32 @@
 - `Accounts().CreditsSnapshot` 的**服务端**语义变了：默认只返回当前还能被调度的
   账号（停用 / 令牌过期的默认排除），已删账号的登记不再下发。要全量用
   `CreditsSnapshotInactive`；对账时用 `TotalRegistered` 对比登记表总行数。
+
+- **`Settings().SaveAutoUpdate` 的请求体从 `AutoUpdatePatch`（指针 + omitempty）
+  换成 `AutoUpdateConfig`（值类型）**：这个接口是**整体替换**，不是局部合并——
+  `validate_config` 缺 `interval_hours` / `window_start` / `window_end` 直接 400，
+  其余字段缺失则回落默认值。指针形状会让人以为「只传一个字段就行」。
+  同时 `GatewayCORSPatch.Origins` 从 `[]string` 改成 `*[]string`：它确实是局部
+  合并，而 `origins: []` 有「清空」的含义，`omitempty` 把这个语义吃掉了。
+- **监控 / 抓包配置的补丁字段全是指针**（`WatchdogLLMPatch` / `WatchdogMailPatch` /
+  `WatchdogQQPatch` 的字符串、布尔、整数字段）：`nil` = 不改，`Ptr("")` = 清空。
+  旧的值类型 + `omitempty` 无法表达「清空已存的密码」。
+- `Tap().ExportSession` 改用 `Accept: text/html`（该端点返回 HTML，原来发
+  `application/json` 是错的），并检测 32 MiB 上限——超限时报错，而不是悄悄给
+  一份被截断的 HTML。
+- `TapTurn` 补齐**两端视角**：`UpstreamResponse` / `UpstreamRecon` 是网关↔上游
+  那一跳，`ClientResponse` / `ClientRecon` / `Passthrough` / `ClientProtocol` 是
+  客户端真正收到的。Chat（透传）两者相同，Anthropic / Responses（翻译）是两份
+  不同报文——只看 `Response` 会把翻译层的输出当成客户端输入。另补 `RequestDigest`
+  （截断场景下的 diff 用它比）。
+- `WatchdogRun` 补 `Skipped` / `Egress`：早退时返回 `ok=false` + `skipped`
+  （「已有一次检测在运行」/「SMTP 出口不通」），此时其余字段是零值——别把它当成
+  「跑过了，什么都没变」。同批补 `WatchdogSend.Egress`、
+  `WatchdogTargetResult.PreviousDigest`、`WatchdogVerdict.LLMError`。
+- `PricingModelTable` 补 `Label`：价目表里每个模型的显示名。服务端不校验它但
+  原样保存，丢了它面板上只能显示键名（`deepseek-flash` 而不是 `DeepSeek-V4.1-Flash`）。
+- `doOnce` 里 401 自动重登的路径判断改用**规范化后**的 path：用 `Do` 逃生舱传
+  `"api/keys"`（无前导斜杠）时，此前不会触发重登。
 
 ### 说明
 

@@ -23,7 +23,7 @@ import (
 //
 // 仅会话管理员可调（API Token 会得到 403）。
 func (s *AccountsService) Export(ctx context.Context, upstreamID *int) (*RawResponse, error) {
-	res, err := s.c.doRaw(ctx, http.MethodGet, "/api/accounts/export", groupQuery(upstreamID), nil)
+	res, err := s.c.doRaw(ctx, http.MethodGet, "/api/accounts/export", s.c.groupQ(upstreamID), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -46,7 +46,7 @@ func (s *AccountsService) Upload(ctx context.Context, files []AccountUploadFile,
 	if len(files) == 0 {
 		return nil, errors.New("wbsdk: Upload 至少要一个文件")
 	}
-	q := groupQuery(upstreamID)
+	q := s.c.groupQ(upstreamID)
 	if overwrite {
 		q.Set("overwrite", strconv.FormatBool(overwrite))
 	}
@@ -70,7 +70,7 @@ func (s *AccountsService) Upload(ctx context.Context, files []AccountUploadFile,
 // 非默认分组读不到它的 config.json，服务端返回 `enabled: null`（未知）。
 func (s *AccountsService) AdminAPIStatus(ctx context.Context, upstreamID *int) (*AdminAPIStatus, error) {
 	var out AdminAPIStatus
-	if _, err := s.c.doJSON(ctx, http.MethodGet, "/api/accounts/admin-api-status", groupQuery(upstreamID), nil, &out); err != nil {
+	if _, err := s.c.doJSON(ctx, http.MethodGet, "/api/accounts/admin-api-status", s.c.groupQ(upstreamID), nil, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -114,7 +114,7 @@ func (s *AccountsService) creditsSnapshot(ctx context.Context, includeInactive b
 // no_model（11102，**不算错误**）/ error。
 func (s *AccountsService) ProbeModels(ctx context.Context, in ProbeModelsIn, upstreamID *int) (*ProbeModelsResult, error) {
 	var out ProbeModelsResult
-	if _, err := s.c.doJSON(ctx, http.MethodPost, "/api/accounts/probe-models", groupQuery(upstreamID), in, &out); err != nil {
+	if _, err := s.c.doJSON(ctx, http.MethodPost, "/api/accounts/probe-models", s.c.groupQ(upstreamID), in, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -127,7 +127,7 @@ func (s *AccountsService) ProbeModels(ctx context.Context, in ProbeModelsIn, ups
 // 失败通常是 refreshToken 已失效，需要重新扫码。
 func (s *AccountsService) RefreshTokens(ctx context.Context, upstreamID *int) (*RefreshTokensResult, error) {
 	var out RefreshTokensResult
-	if _, err := s.c.doJSON(ctx, http.MethodPost, "/api/accounts/refresh-tokens", groupQuery(upstreamID), nil, &out); err != nil {
+	if _, err := s.c.doJSON(ctx, http.MethodPost, "/api/accounts/refresh-tokens", s.c.groupQ(upstreamID), nil, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -173,7 +173,7 @@ func (s *AccountsService) RunRefreshPlan(ctx context.Context) (*RefreshPlanRun, 
 // 开关的路。已领过的账号直接跳过（Status=already），不发注定失败的写请求。
 func (s *AccountsService) ClaimCompensation(ctx context.Context, upstreamID *int) (*CompensationResult, error) {
 	var out CompensationResult
-	if _, err := s.c.doJSON(ctx, http.MethodPost, "/api/accounts/claim-compensation", groupQuery(upstreamID), nil, &out); err != nil {
+	if _, err := s.c.doJSON(ctx, http.MethodPost, "/api/accounts/claim-compensation", s.c.groupQ(upstreamID), nil, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil

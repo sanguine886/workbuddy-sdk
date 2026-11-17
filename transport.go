@@ -18,6 +18,7 @@ const maxRespBytes = 32 << 20 // 32 MiB
 
 const acceptJSON = "application/json"
 const acceptSSE = "text/event-stream"
+const acceptHTML = "text/html"
 
 // RawResponse 是未经解析的响应。
 type RawResponse struct {
@@ -132,7 +133,13 @@ func isPublicPath(path string) bool {
 //
 // 余额端点 /api/usage/token/ 属于此类：路径在管理面前缀里，鉴权却是网关密钥
 // ——服务端直接读 Authorization 头，不认会话 Cookie。
-func isGatewayKeyPath(path string) bool { return path == "/api/usage/token/" }
+//
+// 无尾斜杠的形态也算：服务端注册的是带斜杠的路径，少一个斜杠会先拿 307 再被
+// 重定向过去（同一个 host，Authorization 会被 Go 保留，所以不会掉凭据，但白
+// 多一次往返）。用 Do 逃生舱直接拼这条路径的调用方不该踩这个坑。
+func isGatewayKeyPath(path string) bool {
+	return path == "/api/usage/token/" || path == "/api/usage/token"
+}
 
 func isGatewayPath(path string) bool {
 	return hasPathPrefix(path, "/v1") ||
@@ -258,6 +265,9 @@ func retryable(method string, p RetryPolicy, resp *http.Response, err error) boo
 
 // doOnce 执行一次请求；管理面收到 401 时失效凭据并**重试一次**（自动重登）。
 func (c *Client) doOnce(ctx context.Context, method, path string, query url.Values, body []byte, accept string) (*http.Response, error) {
+	// 与 newRequest 用同一份规范化路径：下面判断「是不是管理面」时若拿原始
+	// path，用 Do 逃生舱传了不带前导斜杠的写法（"api/keys"）就会漏掉自动重登。
+	path = normalizePath(path)
 	req, err := c.newRequest(ctx, method, path, query, body, accept)
 	if err != nil {
 		return nil, err

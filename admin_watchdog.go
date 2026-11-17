@@ -39,7 +39,7 @@ type WatchdogConfig struct {
 type WatchdogTarget struct {
 	Name string `json:"name"`
 	URL  string `json:"url"`
-	// Kind 取值 html | assets。
+	// Kind 取值 html | js | text | assets（assets = 连页面骨架一起比静态资源）。
 	Kind    string `json:"kind"`
 	Enabled bool   `json:"enabled"`
 }
@@ -80,8 +80,10 @@ type WatchdogQQ struct {
 
 // WatchdogConfigPatch 是监控配置的**局部**更新（服务端以当前配置为底合并）。
 type WatchdogConfigPatch struct {
-	Enabled             *bool              `json:"enabled,omitempty"`
-	IntervalMinutes     *int               `json:"interval_minutes,omitempty"`
+	Enabled         *bool `json:"enabled,omitempty"`
+	IntervalMinutes *int  `json:"interval_minutes,omitempty"`
+	// Targets 传的就是**完整新列表**（服务端整体替换，不是按名字合并）。
+	// 注意它必须有至少一个目标，传空切片会被服务端拒（400）；nil = 不改。
 	Targets             []WatchdogTarget   `json:"targets,omitempty"`
 	TimeoutSeconds      *int               `json:"timeout_seconds,omitempty"`
 	AssetLimit          *int               `json:"asset_limit,omitempty"`
@@ -95,34 +97,43 @@ type WatchdogConfigPatch struct {
 }
 
 // WatchdogLLMPatch 是 LLM 段的局部更新。
+//
+// 字符串字段全是指针：nil = 不改，`Ptr("")` = **清空**（服务端对空串是有
+// 意义的，它会把该字段设成空串而不是保持原值）。
 type WatchdogLLMPatch struct {
-	Enabled        *bool  `json:"enabled,omitempty"`
-	BaseURL        string `json:"base_url,omitempty"`
-	APIKey         string `json:"api_key,omitempty"`
-	Model          string `json:"model,omitempty"`
-	TimeoutSeconds *int   `json:"timeout_seconds,omitempty"`
+	Enabled        *bool   `json:"enabled,omitempty"`
+	BaseURL        *string `json:"base_url,omitempty"`
+	APIKey         *string `json:"api_key,omitempty"`
+	Model          *string `json:"model,omitempty"`
+	TimeoutSeconds *int    `json:"timeout_seconds,omitempty"`
 }
 
 // WatchdogMailPatch 是邮件段的局部更新。
+//
+// 字符串字段全是指针：nil = 不改，`Ptr("")` = 清空。密码尤其要注意 ——
+// 「清空密码」和「不改密码」是两件不同的事，用值类型分不出来。
+// Security 不是指针：它只接受 ssl / starttls / none，空串没有意义（服务端忽略）。
 type WatchdogMailPatch struct {
 	Enabled       *bool    `json:"enabled,omitempty"`
-	Host          string   `json:"host,omitempty"`
+	Host          *string  `json:"host,omitempty"`
 	Port          *int     `json:"port,omitempty"`
 	Security      string   `json:"security,omitempty"`
-	Username      string   `json:"username,omitempty"`
-	Password      string   `json:"password,omitempty"`
-	From          string   `json:"from,omitempty"`
+	Username      *string  `json:"username,omitempty"`
+	Password      *string  `json:"password,omitempty"`
+	From          *string  `json:"from,omitempty"`
 	To            []string `json:"to,omitempty"`
-	SubjectPrefix string   `json:"subject_prefix,omitempty"`
+	SubjectPrefix *string  `json:"subject_prefix,omitempty"`
 }
 
 // WatchdogQQPatch 是 QQ 段的局部更新。
+//
+// 字符串字段全是指针：nil = 不改，`Ptr("")` = 清空。
 type WatchdogQQPatch struct {
-	Enabled        *bool  `json:"enabled,omitempty"`
-	BaseURL        string `json:"base_url,omitempty"`
-	APIKey         string `json:"api_key,omitempty"`
-	UMO            string `json:"umo,omitempty"`
-	TimeoutSeconds *int   `json:"timeout_seconds,omitempty"`
+	Enabled        *bool   `json:"enabled,omitempty"`
+	BaseURL        *string `json:"base_url,omitempty"`
+	APIKey         *string `json:"api_key,omitempty"`
+	UMO            *string `json:"umo,omitempty"`
+	TimeoutSeconds *int    `json:"timeout_seconds,omitempty"`
 }
 
 // WatchdogConfigEnvelope 是 GET /api/watchdog/config 的返回。
@@ -168,6 +179,8 @@ type WatchdogVerdict struct {
 	Actions       []string `json:"actions"`
 	// Source 取值 llm | heuristic。
 	Source string `json:"source"`
+	// LLMError 非空表示 LLM 判读失败、这份结论是规则判读的退化结果。
+	LLMError string `json:"llm_error"`
 }
 
 // WatchdogDiff 是结构差异的计数（不含原文）。
@@ -179,13 +192,16 @@ type WatchdogDiff struct {
 
 // WatchdogTargetResult 是单个目标的检测结果。
 type WatchdogTargetResult struct {
-	Name    string           `json:"name"`
-	URL     string           `json:"url"`
-	Status  string           `json:"status"` // baseline_created | unchanged | changed
-	Digest  string           `json:"digest"`
-	Lines   int              `json:"lines"`
-	Diff    *WatchdogDiff    `json:"diff"`
-	Verdict *WatchdogVerdict `json:"verdict"`
+	Name   string `json:"name"`
+	URL    string `json:"url"`
+	Status string `json:"status"` // baseline_created | unchanged | changed
+	// Digest 是本次抓到的内容指纹（截断到 16 位）。
+	Digest string `json:"digest"`
+	// PreviousDigest 是上一次的指纹；只有 Status == "changed" 才有。
+	PreviousDigest string           `json:"previous_digest"`
+	Lines          int              `json:"lines"`
+	Diff           *WatchdogDiff    `json:"diff"`
+	Verdict        *WatchdogVerdict `json:"verdict"`
 }
 
 // WatchdogError 是某个目标抓取失败的说明。
@@ -208,6 +224,9 @@ type WatchdogSend struct {
 	Status int `json:"status"`
 	// Response 是上游响应摘要。
 	Response string `json:"response"`
+	// Egress 是邮件通道这次用的 SMTP 出口探测（10 分钟内复用上次结果）。
+	// 出口不通时 Skipped == "SMTP 出口不通"，原因看这里。
+	Egress *WatchdogEgress `json:"egress"`
 }
 
 // WatchdogRun 是一轮检测的结果。
@@ -230,6 +249,11 @@ type WatchdogRun struct {
 	Claim map[string]any `json:"claim"`
 	Mail  *WatchdogSend  `json:"mail"`
 	QQ    *WatchdogSend  `json:"qq"`
+	// Skipped 非空表示这轮**没跑**（已有一次在跑 / SMTP 出口不通），此时
+	// 其余字段大多是零值——别把它当成「跑过了，什么都没变」。
+	Skipped string `json:"skipped"`
+	// Egress 是 Skipped == "SMTP 出口不通" 时的探测明细。
+	Egress *WatchdogEgress `json:"egress"`
 }
 
 // WatchdogBaselineResult 是清除基线的返回。

@@ -82,11 +82,8 @@ func (e *QuotaError) Is(target error) bool {
 //
 //	网关面：{"error":{"message":..,"type":..,"code":..,"gateway_hint":..}}
 //	管理面：{"detail":"中文散文"} / {"code":"..","error":".."}
-func newAPIError(status int, raw []byte) *APIError {
-	return newAPIErrorWithHeader(status, raw, nil)
-}
-
-// newAPIErrorWithHeader 同 newAPIError，并额外从响应头取 Retry-After。
+//
+// newAPIErrorWithHeader 把响应体解析成 *APIError，并从响应头取 Retry-After。
 func newAPIErrorWithHeader(status int, raw []byte, h http.Header) *APIError {
 	e := &APIError{StatusCode: status, Raw: raw}
 	if h != nil {

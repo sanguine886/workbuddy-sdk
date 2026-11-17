@@ -30,15 +30,38 @@ func (c *Client) effectiveRealm(r Realm) Realm {
 // List 拉取账号列表（本地授权信息 + 上游运行时状态）。
 func (s *AccountsService) List(ctx context.Context) (*AccountsResponse, error) {
 	var out AccountsResponse
-	if _, err := s.c.doJSON(ctx, http.MethodGet, "/api/accounts", nil, nil, &out); err != nil {
+	if _, err := s.c.doJSON(ctx, http.MethodGet, "/api/accounts", s.c.groupQ(nil), nil, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
 }
 
+// AuthStartIn 是发起扫码登录的全部参数。
+//
+// region / upstream_id / proxy 看着像「高级选项」，但漏掉任何一个都会让流程
+// **静默走到错的地方**：漏 region 是国际版新号落盘成功、随后聊天报 14017；
+// 漏 upstream_id 是账号写进了默认分组而不是你以为的那个；漏 proxy 是走默认
+// 线路（有些网络只有某条线路能连腾讯）。
+type AuthStartIn struct {
+	// Realm 决定国内版 / 国际版端点；RealmAny 时用客户端默认版本。
+	// 传了 UID（定向重登）时**被服务端忽略**：版本跟随目标账号。
+	Realm Realm
+	// Region 是国际版的地区代码（如 "HK"）。仅国际版新号需要，国内版留空。
+	Region string
+	// UID 非空 = 定向重登这个账号（见 StartAuthFor）。
+	UID string
+	// UpstreamID 指定分组；nil = 默认分组。
+	UpstreamID *int
+	// Proxy 指定出站线路；nil = **不改**上游当前的默认线路。
+	//
+	// 陷阱：这是写进上游 config 的全局设置，所以 Ptr("") 是「显式切回默认
+	// 线路」而不是「不改」—— 要保留现状就留 nil。
+	Proxy *string
+}
+
 // StartAuth 发起扫码登录；realm 为空时使用客户端默认版本。
 func (s *AccountsService) StartAuth(ctx context.Context, realm Realm) (*AuthStart, error) {
-	return s.startAuth(ctx, realm, "")
+	return s.StartAuthIn(ctx, AuthStartIn{Realm: realm})
 }
 
 // StartAuthFor 对一个**已存在的账号**发起定向重登（uid 为空时等价于 StartAuth）。
@@ -47,30 +70,56 @@ func (s *AccountsService) StartAuth(ctx context.Context, realm Realm) (*AuthStar
 // 而不是界面上切到的那个。返回体里的 Target 会告诉你是哪个账号。
 // uid 找不到时服务端回 404。
 func (s *AccountsService) StartAuthFor(ctx context.Context, realm Realm, uid string) (*AuthStart, error) {
-	return s.startAuth(ctx, realm, uid)
+	return s.StartAuthIn(ctx, AuthStartIn{Realm: realm, UID: uid})
 }
 
-func (s *AccountsService) startAuth(ctx context.Context, realm Realm, uid string) (*AuthStart, error) {
-	body := map[string]string{"realm": string(s.c.effectiveRealm(realm))}
-	if uid != "" {
-		body["uid"] = uid
+// StartAuthIn 是带全部参数的发码入口（国际版地区、分组、出站线路）。
+func (s *AccountsService) StartAuthIn(ctx context.Context, in AuthStartIn) (*AuthStart, error) {
+	// 用 any 而不是 map[string]string：proxy 要能区分「没给」与「给了空串」。
+	body := map[string]any{"realm": string(s.c.effectiveRealm(in.Realm))}
+	if in.Region != "" {
+		body["region"] = in.Region
+	}
+	if in.UID != "" {
+		body["uid"] = in.UID
+	}
+	if in.Proxy != nil {
+		body["proxy"] = *in.Proxy
 	}
 	var out AuthStart
-	if _, err := s.c.doJSON(ctx, http.MethodPost, "/api/auth/start", nil, body, &out); err != nil {
+	if _, err := s.c.doJSON(ctx, http.MethodPost, "/api/auth/start",
+		s.c.groupQ(in.UpstreamID), body, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
 }
 
+// AuthPollIn 是轮询扫码结果的参数。
+type AuthPollIn struct {
+	// State 是 StartAuth 返回的那串一次性单据，必填。
+	State string
+	// Realm 决定去哪一版问；RealmAny 时用客户端默认版本。
+	Realm Realm
+	// Region 是国际版地区代码。可以比 StartAuth 更晚到（用户在弹窗里才选），
+	// 但不能只靠这里——后台轮询也要用它做地区注册。
+	Region string
+	// UpstreamID 必须与 StartAuthIn 传的**同一个**：落盘发生在 poll 这一步，
+	// 分组对不上就写不进你那个分组。
+	UpstreamID *int
+}
+
 // PollAuth 轮询扫码结果。region 仅国际版需要（新号必须先做地区注册，如 "HK"）。
 func (s *AccountsService) PollAuth(ctx context.Context, state string, realm Realm, region string) (*AuthPoll, error) {
-	q := url.Values{}
-	q.Set("state", state)
-	if realm != RealmAny {
-		q.Set("realm", string(realm))
-	}
-	if region != "" {
-		q.Set("region", region)
+	return s.PollAuthIn(ctx, AuthPollIn{State: state, Realm: realm, Region: region})
+}
+
+// PollAuthIn 是带全部分组参数的轮询入口（与 StartAuthIn 配对使用）。
+func (s *AccountsService) PollAuthIn(ctx context.Context, in AuthPollIn) (*AuthPoll, error) {
+	q := s.c.groupQ(in.UpstreamID)
+	q.Set("state", in.State)
+	q.Set("realm", string(s.c.effectiveRealm(in.Realm)))
+	if in.Region != "" {
+		q.Set("region", in.Region)
 	}
 	var out AuthPoll
 	if _, err := s.c.doJSON(ctx, http.MethodGet, "/api/auth/poll", q, nil, &out); err != nil {
@@ -83,7 +132,7 @@ func (s *AccountsService) PollAuth(ctx context.Context, state string, realm Real
 func (s *AccountsService) Checkin(ctx context.Context, file string) (*CheckinResult, error) {
 	var out CheckinResult
 	path := accountPath(file) + "/checkin"
-	if _, err := s.c.doJSON(ctx, http.MethodPost, path, nil, nil, &out); err != nil {
+	if _, err := s.c.doJSON(ctx, http.MethodPost, path, s.c.groupQ(nil), nil, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -92,7 +141,7 @@ func (s *AccountsService) Checkin(ctx context.Context, file string) (*CheckinRes
 // CheckinAll 对所有可签到账号执行一次签到。
 func (s *AccountsService) CheckinAll(ctx context.Context) (*CheckinAllResult, error) {
 	var out CheckinAllResult
-	if _, err := s.c.doJSON(ctx, http.MethodPost, "/api/accounts/checkin-all", nil, nil, &out); err != nil {
+	if _, err := s.c.doJSON(ctx, http.MethodPost, "/api/accounts/checkin-all", s.c.groupQ(nil), nil, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -100,7 +149,7 @@ func (s *AccountsService) CheckinAll(ctx context.Context) (*CheckinAllResult, er
 
 // Credits 查询单个账号的实时积分（直接向腾讯查询）。force=false 时命中服务端 60s 缓存。
 func (s *AccountsService) Credits(ctx context.Context, file string, force bool) (*Credits, error) {
-	q := url.Values{}
+	q := s.c.groupQ(nil)
 	q.Set("force", strconv.FormatBool(force))
 	var out Credits
 	path := accountPath(file) + "/credits"
@@ -121,7 +170,7 @@ func (s *AccountsService) RefreshCredit(ctx context.Context, file string, force 
 }
 
 func (s *AccountsService) refreshCredits(ctx context.Context, force bool, file string) (*CreditsRefresh, error) {
-	q := url.Values{}
+	q := s.c.groupQ(nil)
 	q.Set("force", strconv.FormatBool(force))
 	if file != "" {
 		q.Set("file", file)
@@ -138,7 +187,7 @@ func (s *AccountsService) SetDisabled(ctx context.Context, file string, disabled
 	var out SetDisabledResult
 	path := accountPath(file) + "/disabled"
 	body := map[string]bool{"disabled": disabled}
-	if _, err := s.c.doJSON(ctx, http.MethodPost, path, nil, body, &out); err != nil {
+	if _, err := s.c.doJSON(ctx, http.MethodPost, path, s.c.groupQ(nil), body, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -149,7 +198,7 @@ func (s *AccountsService) SetNote(ctx context.Context, file, note string) (*Note
 	var out NoteResult
 	path := accountPath(file) + "/note"
 	body := map[string]string{"note": note}
-	if _, err := s.c.doJSON(ctx, http.MethodPut, path, nil, body, &out); err != nil {
+	if _, err := s.c.doJSON(ctx, http.MethodPut, path, s.c.groupQ(nil), body, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -159,7 +208,7 @@ func (s *AccountsService) SetNote(ctx context.Context, file, note string) (*Note
 func (s *AccountsService) Test(ctx context.Context, file string) (*ActionResult, error) {
 	var out ActionResult
 	path := accountPath(file) + "/test"
-	if _, err := s.c.doJSON(ctx, http.MethodPost, path, nil, nil, &out); err != nil {
+	if _, err := s.c.doJSON(ctx, http.MethodPost, path, s.c.groupQ(nil), nil, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -169,7 +218,7 @@ func (s *AccountsService) Test(ctx context.Context, file string) (*ActionResult,
 func (s *AccountsService) Refresh(ctx context.Context, file string) (*ActionResult, error) {
 	var out ActionResult
 	path := accountPath(file) + "/refresh"
-	if _, err := s.c.doJSON(ctx, http.MethodPost, path, nil, nil, &out); err != nil {
+	if _, err := s.c.doJSON(ctx, http.MethodPost, path, s.c.groupQ(nil), nil, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -182,7 +231,7 @@ func (s *AccountsService) Refresh(ctx context.Context, file string) (*ActionResu
 func (s *AccountsService) ClearCooling(ctx context.Context, file string) (*ActionResult, error) {
 	var out ActionResult
 	path := accountPath(file) + "/clear-cooling"
-	if _, err := s.c.doJSON(ctx, http.MethodPost, path, nil, nil, &out); err != nil {
+	if _, err := s.c.doJSON(ctx, http.MethodPost, path, s.c.groupQ(nil), nil, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -198,7 +247,7 @@ func (s *AccountsService) ClearCooling(ctx context.Context, file string) (*Actio
 func (s *AccountsService) ClearCoolingDetail(ctx context.Context, file string) (*ClearCoolingResult, error) {
 	var out ClearCoolingResult
 	path := accountPath(file) + "/clear-cooling"
-	if _, err := s.c.doJSON(ctx, http.MethodPost, path, nil, nil, &out); err != nil {
+	if _, err := s.c.doJSON(ctx, http.MethodPost, path, s.c.groupQ(nil), nil, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -207,7 +256,7 @@ func (s *AccountsService) ClearCoolingDetail(ctx context.Context, file string) (
 // Delete 删除一个账号（会丢凭证，需重新扫码）。
 func (s *AccountsService) Delete(ctx context.Context, file string) (*SuccessResult, error) {
 	var out SuccessResult
-	if _, err := s.c.doJSON(ctx, http.MethodDelete, accountPath(file), nil, nil, &out); err != nil {
+	if _, err := s.c.doJSON(ctx, http.MethodDelete, accountPath(file), s.c.groupQ(nil), nil, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -322,7 +371,7 @@ func (s *AccountsService) UpstreamLogs(ctx context.Context, limit int) (*Upstrea
 // Restart 重启上游（一般无需手动调用，保存配置会自动重载）。
 func (s *AccountsService) Restart(ctx context.Context) (*ActionResult, error) {
 	var out ActionResult
-	if _, err := s.c.doJSON(ctx, http.MethodPost, "/api/restart", nil, nil, &out); err != nil {
+	if _, err := s.c.doJSON(ctx, http.MethodPost, "/api/restart", s.c.groupQ(nil), nil, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -336,7 +385,7 @@ func (s *AccountsService) SetProxy(ctx context.Context, file, proxy string, upst
 	var out AccountProxyResult
 	body := map[string]string{"proxy": proxy}
 	path := accountPath(file) + "/proxy"
-	if _, err := s.c.doJSON(ctx, http.MethodPut, path, groupQuery(upstreamID), body, &out); err != nil {
+	if _, err := s.c.doJSON(ctx, http.MethodPut, path, s.c.groupQ(upstreamID), body, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -349,7 +398,7 @@ func (s *AccountsService) SetWeight(ctx context.Context, file string, weight flo
 	var out AccountWeightResult
 	body := map[string]float64{"weight": weight}
 	path := accountPath(file) + "/weight"
-	if _, err := s.c.doJSON(ctx, http.MethodPut, path, groupQuery(upstreamID), body, &out); err != nil {
+	if _, err := s.c.doJSON(ctx, http.MethodPut, path, s.c.groupQ(upstreamID), body, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -362,7 +411,7 @@ func (s *AccountsService) SetWeight(ctx context.Context, file string, weight flo
 func (s *AccountsService) ForceCooling(ctx context.Context, file string, in ForceCoolingIn, upstreamID *int) (map[string]any, error) {
 	var out map[string]any
 	path := accountPath(file) + "/force-cooling"
-	if _, err := s.c.doJSON(ctx, http.MethodPost, path, groupQuery(upstreamID), in, &out); err != nil {
+	if _, err := s.c.doJSON(ctx, http.MethodPost, path, s.c.groupQ(upstreamID), in, &out); err != nil {
 		return nil, err
 	}
 	return out, nil
@@ -376,7 +425,7 @@ func (s *AccountsService) Move(ctx context.Context, file string, toUpstreamID in
 	var out AccountMoveResult
 	body := map[string]int{"to_upstream_id": toUpstreamID}
 	path := accountPath(file) + "/move"
-	if _, err := s.c.doJSON(ctx, http.MethodPost, path, groupQuery(upstreamID), body, &out); err != nil {
+	if _, err := s.c.doJSON(ctx, http.MethodPost, path, s.c.groupQ(upstreamID), body, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -394,8 +443,7 @@ type AccountOrder struct {
 // Order 读取分组的账号自定义顺序（只读不设管理员门槛：顺序是共享视图）。
 func (s *AccountsService) Order(ctx context.Context, upstreamID *int) (*AccountOrder, error) {
 	var out AccountOrder
-	if _, err := s.c.doJSON(ctx, http.MethodGet, "/api/accounts/order",
-		upstreamQuery(upstreamID), nil, &out); err != nil {
+	if _, err := s.c.doJSON(ctx, http.MethodGet, "/api/accounts/order", s.c.groupQ(upstreamID), nil, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -405,8 +453,7 @@ func (s *AccountsService) Order(ctx context.Context, upstreamID *int) (*AccountO
 func (s *AccountsService) SaveOrder(ctx context.Context, order []string, upstreamID *int) (*AccountOrder, error) {
 	body := AccountOrder{Order: order}
 	var out AccountOrder
-	if _, err := s.c.doJSON(ctx, http.MethodPut, "/api/accounts/order",
-		upstreamQuery(upstreamID), body, &out); err != nil {
+	if _, err := s.c.doJSON(ctx, http.MethodPut, "/api/accounts/order", s.c.groupQ(upstreamID), body, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -463,13 +510,4 @@ func (s *AccountsService) KeepTaskScheduler(ctx context.Context, keep string) (*
 		return nil, err
 	}
 	return &out, nil
-}
-
-// upstreamQuery 拼 upstream_id 查询参数（nil = 默认分组）。
-func upstreamQuery(upstreamID *int) url.Values {
-	vals := url.Values{}
-	if upstreamID != nil {
-		vals.Set("upstream_id", strconv.Itoa(*upstreamID))
-	}
-	return vals
 }
