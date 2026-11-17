@@ -176,9 +176,14 @@ type Pricing struct {
 	// MissingHolidayYears 是节假日表里缺的年份。
 	MissingHolidayYears []int `json:"missing_holiday_years"`
 	// StaleAfterDays 是价目表超过多少天没核对就应当复核。
-	StaleAfterDays int               `json:"stale_after_days"`
-	Aliases        map[string]string `json:"aliases"`
-	PricedModels   []string          `json:"priced_models"`
+	StaleAfterDays int `json:"stale_after_days"`
+	// Aliases 是「客户端用的模型名 → 价目表里的模型名」。
+	//
+	// 用 StringMap 而不是 map[string]string：服务端只校验 aliases 是个对象、
+	// **不校验值的类型**，手改坏一个键就会让整份价目表读不出来（一个脏别名
+	// 换来全表不可用，代价完全不对等）。StringMap 跳过非字符串值。
+	Aliases      StringMap `json:"aliases"`
+	PricedModels []string  `json:"priced_models"`
 }
 
 // PricingOverride 是价目覆盖（PUT /api/settings/pricing 的请求体）。

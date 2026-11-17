@@ -117,7 +117,14 @@ func (s *AccountsService) PollAuth(ctx context.Context, state string, realm Real
 func (s *AccountsService) PollAuthIn(ctx context.Context, in AuthPollIn) (*AuthPoll, error) {
 	q := s.c.groupQ(in.UpstreamID)
 	q.Set("state", in.State)
-	q.Set("realm", string(s.c.effectiveRealm(in.Realm)))
+	// 这里**不能**套 effectiveRealm：轮询的 realm 是**一致性校验**，不是路由。
+	// 服务端拿它与发码时登记的版本比，不一致就回 realm_mismatch（不落盘）。
+	// RealmAny 的含义是「我不知道、按登记的那个来」——折成 cn 会让国际版的码
+	// 恒判不一致，调用方一直空转到码过期。发码侧（StartAuthIn）相反：那里的
+	// realm 真的决定打哪一版端点，必须给出确定值。
+	if in.Realm != RealmAny {
+		q.Set("realm", string(in.Realm))
+	}
 	if in.Region != "" {
 		q.Set("region", in.Region)
 	}

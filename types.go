@@ -100,6 +100,10 @@ type AuthStart struct {
 	State   string `json:"state"`
 	AuthURL string `json:"authUrl"`
 	Realm   Realm  `json:"realm"`
+	// Proxy 是服务端**实际用了**的出站线路名（空串 = 直连 / 默认线路）。
+	// 只在 StartAuthIn 显式给了 Proxy 时才会与你传的值不同，排障「到底走的
+	// 哪条线」看这个，别拿自己传的参数当事实。
+	Proxy string `json:"proxy"`
 	// Target 只在**定向重登**（StartAuthFor 传了 uid）时返回：这次要刷的是哪个账号。
 	// 此时 Realm 跟随目标账号，调用方传的 realm 被忽略。
 	Target *AuthTarget `json:"target,omitempty"`

@@ -458,3 +458,162 @@ func TestWithUpstreamID(t *testing.T) {
 		t.Fatalf("List query = %q", q)
 	}
 }
+
+// 抓包的轮次级视图：status 是**整数**（HTTP 状态码），token 计数可空。
+//
+// 这条 fixture 是照上游真实返回抄的：tap_turns.status 是 INTEGER 列
+// （db.py），写成 string 会让 Turn() 对任何真实记录解码失败——而列表接口
+// 不返回轮次详情，测试很容易绕开它。
+func TestTapTurnDecode(t *testing.T) {
+	srv, _ := newReplay(t, map[string]func(http.ResponseWriter, *http.Request){
+		"/api/tap/turns/11": func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"id":11,"session_id":7,"seq":1,"ts":1763300000,`+
+				`"path":"/v1/chat/completions","protocol":"chat","model":"glm-5.2",`+
+				`"status":200,"stream":true,"latency_ms":842,"first_token_ms":120,`+
+				`"prompt_tokens":1024,"completion_tokens":256,`+
+				`"cache_hit_tokens":null,"cache_miss_tokens":null,`+
+				`"cost":0.12,"error":"","truncated":false,`+
+				`"request":{"messages":[{"role":"user","content":"hi"}]},`+
+				`"request_ok":true,"response":{"choices":[]},"response_ok":true,`+
+				`"passthrough":true,"client_protocol":"chat",`+
+				`"summary":{"messages":1,"roles":{"user":1},"tools":0,"system_chars":0}}`)
+		},
+		"/api/tap/sessions/7": func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"id":7,"fingerprint":"fp","client":"codex",`+
+				`"kind":"main","protocol":"chat","model":"glm-5.2","turns":1,`+
+				`"items":[{"id":11,"seq":1,"ts":1763300000,"status":502,"stream":false,`+
+				`"model":"glm-5.2","prompt_tokens":null,"completion_tokens":null,`+
+				`"error":"upstream 502","truncated":false,"protocol":"chat"}]}`)
+		},
+	})
+
+	c := NewClient(srv.URL, WithAdminCookie("wb_session=x"))
+	ctx := context.Background()
+
+	turn, err := c.Tap().Turn(ctx, 11)
+	if err != nil {
+		t.Fatalf("Tap.Turn: %v", err)
+	}
+	if turn.Status == nil || *turn.Status != 200 {
+		t.Fatalf("Turn.Status = %v, 期望 200", turn.Status)
+	}
+	if turn.PromptTokens == nil || *turn.PromptTokens != 1024 {
+		t.Fatalf("Turn.PromptTokens = %v", turn.PromptTokens)
+	}
+	// null != 0：没采集到的缓存计数必须留 nil，不能变成「缓存命中 0 次」。
+	if turn.CacheHitTokens != nil || turn.CacheMissTokens != nil {
+		t.Fatalf("null 的缓存计数应当是 nil：hit=%v miss=%v",
+			turn.CacheHitTokens, turn.CacheMissTokens)
+	}
+	if !turn.Passthrough || turn.ClientProtocol != "chat" {
+		t.Fatalf("两端视角: passthrough=%v clientProtocol=%q", turn.Passthrough, turn.ClientProtocol)
+	}
+
+	det, err := c.Tap().Session(ctx, 7)
+	if err != nil {
+		t.Fatalf("Tap.Session: %v", err)
+	}
+	if len(det.Items) != 1 {
+		t.Fatalf("items = %d", len(det.Items))
+	}
+	if got := det.Items[0].Status; got == nil || *got != 502 {
+		t.Fatalf("summary.Status = %v, 期望 502", got)
+	}
+}
+
+// 轮询的 realm 是**一致性校验**，不是路由：RealmAny 时必须不发，
+// 否则国际版的码会被判 realm_mismatch 并一直空转到过期。
+func TestPollAuthRealm(t *testing.T) {
+	srv, recs := newReplay(t, map[string]func(http.ResponseWriter, *http.Request){
+		"/api/auth/poll": func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"status":"waiting"}`)
+		},
+	})
+	c := NewClient(srv.URL, WithAdminCookie("wb_session=x"), WithRealm(RealmGlobal))
+	ctx := context.Background()
+
+	if _, err := c.Accounts().PollAuth(ctx, "st1", RealmAny, ""); err != nil {
+		t.Fatalf("PollAuth: %v", err)
+	}
+	if q := lastQuery(t, *recs); strings.Contains(q, "realm") {
+		t.Fatalf("RealmAny 不该发 realm，实得 %q", q)
+	}
+
+	if _, err := c.Accounts().PollAuthIn(ctx, AuthPollIn{
+		State: "st2", Realm: RealmCN, Region: "HK",
+	}); err != nil {
+		t.Fatalf("PollAuthIn: %v", err)
+	}
+	if q := lastQuery(t, *recs); q != "realm=cn&region=HK&state=st2" {
+		t.Fatalf("显式 realm 要发出去，实得 %q", q)
+	}
+}
+
+// 价目表里的别名被手改坏（值不是字符串）时，整份配置仍要读得出来。
+func TestPricingToleratesDirtyAlias(t *testing.T) {
+	srv, _ := newReplay(t, map[string]func(http.ResponseWriter, *http.Request){
+		"/api/settings/pricing": func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"currency":"CNY","money_unit":"元/百万 tokens",`+
+				`"versions":[],`+
+				`"aliases":{"glm-5.2":"glm-5.2","broken":123,"also":"ok"},`+
+				`"priced_models":["glm-5.2"],"stale_after_days":90}`)
+		},
+	})
+	got, err := NewClient(srv.URL, WithAdminCookie("wb_session=x")).Settings().Pricing(context.Background())
+	if err != nil {
+		t.Fatalf("Pricing: %v", err)
+	}
+	if got.Aliases["glm-5.2"] != "glm-5.2" || got.Aliases["also"] != "ok" {
+		t.Fatalf("好别名应当保留：%v", got.Aliases)
+	}
+	if _, ok := got.Aliases["broken"]; ok {
+		t.Fatalf("非字符串值应当被跳过：%v", got.Aliases)
+	}
+}
+
+// 局部更新里「清空」与「不改」是两个动作，必须都能表达。
+func TestWatchdogPatchClears(t *testing.T) {
+	srv, recs := newReplay(t, nil)
+	c := NewClient(srv.URL, WithAdminCookie("wb_session=x"))
+	ctx := context.Background()
+
+	// Ptr("") / Ptr([]string{}) 是**清空**：空串和空列表在服务端都有意义。
+	if _, err := c.Watchdog().SaveConfig(ctx, WatchdogConfigPatch{
+		Mail: &WatchdogMailPatch{Password: Ptr(""), To: Ptr([]string{})},
+	}); err != nil {
+		t.Fatalf("SaveConfig: %v", err)
+	}
+	b := lastBody(t, *recs)
+	if !strings.Contains(b, `"password":""`) {
+		t.Fatalf("Ptr(\"\") 应当发出空串：%s", b)
+	}
+	if !strings.Contains(b, `"to":[]`) {
+		t.Fatalf("Ptr([]string{}) 应当发出空数组：%s", b)
+	}
+
+	// nil 是**不改**：整个 to / password 都不该出现在请求体里。
+	if _, err := c.Watchdog().SaveConfig(ctx, WatchdogConfigPatch{
+		Mail: &WatchdogMailPatch{Host: Ptr("smtp.example.com")},
+	}); err != nil {
+		t.Fatalf("SaveConfig: %v", err)
+	}
+	b = lastBody(t, *recs)
+	if strings.Contains(b, `"to"`) || strings.Contains(b, `"password"`) {
+		t.Fatalf("nil 字段不该出现：%s", b)
+	}
+
+	// 空 targets 本来就会被服务端拒（400），要真的发出去让用户看到报错，
+	// 而不是被 omitempty 吞成「什么都没改」。
+	if _, err := c.Watchdog().SaveConfig(ctx, WatchdogConfigPatch{
+		Targets: Ptr([]WatchdogTarget{}),
+	}); err != nil {
+		t.Fatalf("SaveConfig: %v", err)
+	}
+	if b := lastBody(t, *recs); !strings.Contains(b, `"targets":[]`) {
+		t.Fatalf("Ptr([]WatchdogTarget{}) 应当发出空数组：%s", b)
+	}
+}

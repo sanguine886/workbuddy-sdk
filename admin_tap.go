@@ -84,19 +84,23 @@ type TapAux struct {
 
 // TapTurnSummary 是会话详情里的一轮摘要（不含正文）。
 type TapTurnSummary struct {
-	ID               int64    `json:"id"`
-	Seq              int      `json:"seq"`
-	TS               int64    `json:"ts"`
-	Status           string   `json:"status"`
-	Stream           bool     `json:"stream"`
-	LatencyMS        *int     `json:"latency_ms"`
-	FirstTokenMS     *int     `json:"first_token_ms"`
-	Model            string   `json:"model"`
-	MappedModel      string   `json:"mapped_model"`
-	PromptTokens     int      `json:"prompt_tokens"`
-	CompletionTokens int      `json:"completion_tokens"`
-	CacheHitTokens   int      `json:"cache_hit_tokens"`
-	CacheMissTokens  int      `json:"cache_miss_tokens"`
+	ID  int64 `json:"id"`
+	Seq int   `json:"seq"`
+	TS  int64 `json:"ts"`
+	// Status 是这一轮返回给客户端的 HTTP 状态码；nil = 没采到（存量行）。
+	// 上游那一列是 INTEGER，不是 "ok"/"error" 这类字串。
+	Status       *int   `json:"status"`
+	Stream       bool   `json:"stream"`
+	LatencyMS    *int   `json:"latency_ms"`
+	FirstTokenMS *int   `json:"first_token_ms"`
+	Model        string `json:"model"`
+	MappedModel  string `json:"mapped_model"`
+	// 四个 token 计数都是指针：上游那几列可空，NULL 是「没采到」而不是 0
+	// ——0 token 是一个真实结果（例如失败请求），两者混起来会让用量统计失真。
+	PromptTokens     *int     `json:"prompt_tokens"`
+	CompletionTokens *int     `json:"completion_tokens"`
+	CacheHitTokens   *int     `json:"cache_hit_tokens"`
+	CacheMissTokens  *int     `json:"cache_miss_tokens"`
 	Cost             *float64 `json:"cost"`
 	Error            string   `json:"error"`
 	Truncated        bool     `json:"truncated"`
@@ -142,22 +146,24 @@ type TapSummary struct {
 // 要判结构由调用方按协议自己解。RequestOK / ResponseOK 说明正文是否解析成功
 // ——截断过的记录必然解析不了，Truncated 为真。
 type TapTurn struct {
-	ID               int64           `json:"id"`
-	SessionID        int64           `json:"session_id"`
-	Seq              int             `json:"seq"`
-	TS               int64           `json:"ts"`
-	Path             string          `json:"path"`
-	Protocol         string          `json:"protocol"`
-	Model            string          `json:"model"`
-	MappedModel      string          `json:"mapped_model"`
-	Status           string          `json:"status"`
-	Stream           bool            `json:"stream"`
-	LatencyMS        *int            `json:"latency_ms"`
-	FirstTokenMS     *int            `json:"first_token_ms"`
-	PromptTokens     int             `json:"prompt_tokens"`
-	CompletionTokens int             `json:"completion_tokens"`
-	CacheHitTokens   int             `json:"cache_hit_tokens"`
-	CacheMissTokens  int             `json:"cache_miss_tokens"`
+	ID          int64  `json:"id"`
+	SessionID   int64  `json:"session_id"`
+	Seq         int    `json:"seq"`
+	TS          int64  `json:"ts"`
+	Path        string `json:"path"`
+	Protocol    string `json:"protocol"`
+	Model       string `json:"model"`
+	MappedModel string `json:"mapped_model"`
+	// Status 同 TapTurnSummary.Status：HTTP 状态码，nil = 没采到。
+	Status       *int `json:"status"`
+	Stream       bool `json:"stream"`
+	LatencyMS    *int `json:"latency_ms"`
+	FirstTokenMS *int `json:"first_token_ms"`
+	// 四个 token 计数可空（NULL = 没采到，不是 0），见 TapTurnSummary。
+	PromptTokens     *int            `json:"prompt_tokens"`
+	CompletionTokens *int            `json:"completion_tokens"`
+	CacheHitTokens   *int            `json:"cache_hit_tokens"`
+	CacheMissTokens  *int            `json:"cache_miss_tokens"`
 	Cost             *float64        `json:"cost"`
 	Error            string          `json:"error"`
 	Truncated        bool            `json:"truncated"`

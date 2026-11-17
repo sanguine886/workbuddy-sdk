@@ -82,9 +82,11 @@ type WatchdogQQ struct {
 type WatchdogConfigPatch struct {
 	Enabled         *bool `json:"enabled,omitempty"`
 	IntervalMinutes *int  `json:"interval_minutes,omitempty"`
-	// Targets 传的就是**完整新列表**（服务端整体替换，不是按名字合并）。
-	// 注意它必须有至少一个目标，传空切片会被服务端拒（400）；nil = 不改。
-	Targets             []WatchdogTarget   `json:"targets,omitempty"`
+	// Targets 传的就是**完整新列表**（服务端整体替换，不是按名字合并）；nil = 不改。
+	// 用指针是为了让 Ptr([]WatchdogTarget{}) 真的发出 `[]` 并拿到 400 ——
+	// 传空切片本来就是错的，应当报错，而不是被 omitempty 悄悄吞成「不改」。
+	// 它必须有至少一个目标，最多 10 个。
+	Targets             *[]WatchdogTarget  `json:"targets,omitempty"`
 	TimeoutSeconds      *int               `json:"timeout_seconds,omitempty"`
 	AssetLimit          *int               `json:"asset_limit,omitempty"`
 	NotifyOn            *string            `json:"notify_on,omitempty"`
@@ -114,20 +116,26 @@ type WatchdogLLMPatch struct {
 // 「清空密码」和「不改密码」是两件不同的事，用值类型分不出来。
 // Security 不是指针：它只接受 ssl / starttls / none，空串没有意义（服务端忽略）。
 type WatchdogMailPatch struct {
-	Enabled       *bool    `json:"enabled,omitempty"`
-	Host          *string  `json:"host,omitempty"`
-	Port          *int     `json:"port,omitempty"`
-	Security      string   `json:"security,omitempty"`
-	Username      *string  `json:"username,omitempty"`
-	Password      *string  `json:"password,omitempty"`
-	From          *string  `json:"from,omitempty"`
-	To            []string `json:"to,omitempty"`
-	SubjectPrefix *string  `json:"subject_prefix,omitempty"`
+	Enabled  *bool   `json:"enabled,omitempty"`
+	Host     *string `json:"host,omitempty"`
+	Port     *int    `json:"port,omitempty"`
+	Security string  `json:"security,omitempty"`
+	Username *string `json:"username,omitempty"`
+	Password *string `json:"password,omitempty"`
+	From     *string `json:"from,omitempty"`
+	// To 是指针：nil = 不改，Ptr([]string{}) = **清空收件人**（服务端接受空列表）。
+	// 用值切片时 omitempty 会把空列表吃掉，「清空收件人」永远发不出去。
+	To            *[]string `json:"to,omitempty"`
+	SubjectPrefix *string   `json:"subject_prefix,omitempty"`
 }
 
 // WatchdogQQPatch 是 QQ 段的局部更新。
 //
 // 字符串字段全是指针：nil = 不改，`Ptr("")` = 清空。
+// WatchdogQQPatch 是 QQ / AstrBot 段的局部更新。
+//
+// Enabled 同 WatchdogMailPatch：SaveConfig 有效，测试端点不读（QQBots / TestQQ
+// 会强制打开，因为用户正是在还没启用通知时来验证配置的）。
 type WatchdogQQPatch struct {
 	Enabled        *bool   `json:"enabled,omitempty"`
 	BaseURL        *string `json:"base_url,omitempty"`

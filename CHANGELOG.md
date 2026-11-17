@@ -121,6 +121,29 @@
 - `doOnce` 里 401 自动重登的路径判断改用**规范化后**的 path：用 `Do` 逃生舱传
   `"api/keys"`（无前导斜杠）时，此前不会触发重登。
 
+### 修掉的硬性契约错误
+
+- **`TapTurn.Status` / `TapTurnSummary.Status` 从 `string` 改成 `*int`**：
+  `tap_turns.status` 是 SQLite 的 **INTEGER** 列（HTTP 状态码），声明成 string
+  会让 `Turn()` / `Session()` 对**任何真实记录**解码失败
+  （`cannot unmarshal number into ... type string`）。列表接口不返回轮次详情，
+  所以只看 `Sessions()` 的测试发现不了——已补 `Turn()` / `Session()` 的 fixture。
+- **`PollAuthIn` 在 `RealmAny` 时不再发 `realm`**：轮询的 `realm` 是
+  **一致性校验**而不是路由，服务端拿它与发码时登记的版本比，不一致就回
+  `realm_mismatch` 且不落盘。折成 `cn` 会让**国际版的码恒判不一致**，调用方一路
+  空转到过期。发码侧（`StartAuthIn`）相反：那里的 realm 真的决定打哪一版端点。
+- `TapTurnSummary` / `TapTurn` 的四个 token 计数改成 `*int`：上游那几列可空，
+  `NULL` 是「没采到」而不是 0——0 token 是一个真实结果（例如失败请求），
+  两者混起来会让用量统计失真。同结构里 `latency_ms` / `cost` 本来就是指针。
+- `WatchdogConfigPatch.Targets` 与 `WatchdogMailPatch.To` 改成 `*[]T`：
+  `Ptr([]string{})` 是「清空收件人」，`Ptr([]WatchdogTarget{})` 是「发一个空列表
+  让服务端回 400」。用值切片时 `omitempty` 会把两者都吞成「不改」。
+- `Pricing.Aliases` 用新增的 `StringMap`（`map[string]string` 加自定义
+  `UnmarshalJSON`，跳过非字符串值）：服务端只校验 `aliases` 是个对象、不校验
+  值的类型，一个被改成数字的键会让整份价目表读不出来。
+- `AuthStart` 补 `Proxy`：服务端会回显这次实际用的出站线路名，排障时看它，
+  别拿自己传的参数当事实。
+
 ### 说明
 
 - `Tap()` 的接口读取的是**完整对话内容**（含 system prompt 与工具结果），

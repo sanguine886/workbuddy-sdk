@@ -123,7 +123,16 @@ c := wbsdk.NewClient(base, wbsdk.WithAdminLogin("admin", "***"),
 c.Accounts().Checkin(ctx, "workbuddy123.json") // 自动带上 ?upstream_id=5
 c.Accounts().Order(ctx, wbsdk.Ptr(9))          // 显式传的覆盖默认值
 c.SetUpstreamID(0)                             // 取消，回到默认分组
+
+// 发码 + 轮询：两者要带**同一个**分组（落盘发生在轮询那一步）
+st, _ := c.Accounts().StartAuthIn(ctx, wbsdk.AuthStartIn{Realm: wbsdk.RealmGlobal, Region: "HK"})
+p, _ := c.Accounts().PollAuthIn(ctx, wbsdk.AuthPollIn{State: st.State, Realm: wbsdk.RealmAny})
 ```
+
+> 发码的 `Realm` 与轮询的 `Realm` 语义**不同**：前者决定打哪一版端点（必须给
+> 确定值，`RealmAny` 用客户端默认），后者是**一致性校验**——服务端拿它与发码
+> 时登记的版本比，不一致就回 `realm_mismatch` 且不落盘。所以轮询传 `RealmAny`
+> 才是「按登记的那个来」，固定写 `RealmCN` 会让国际版的码一直失败。
 
 单分组部署不用管它。为什么要显式设：错分组的症状极其误导——按文件名清冷却时，
 服务端会去默认分组的目录里找那个文件，找不到就回 **404「账号文件不存在」**，
@@ -139,12 +148,15 @@ c.SetUpstreamID(0)                             // 取消，回到默认分组
 | `nil` | **不改**这一项 |
 | `wbsdk.Ptr("")` | 真的把它改成空串（例如清空已存的邮箱地址） |
 | `wbsdk.Ptr(false)` | 真的关掉它 |
+| `wbsdk.Ptr([]string{})` | 真的清空这个列表（例如清空收件人） |
 
 ```go
 // 只关掉邮件通知，其余不动
 patch := wbsdk.WatchdogConfigPatch{Mail: &wbsdk.WatchdogMailPatch{Enabled: wbsdk.Ptr(false)}}
 // 清空已保存的 SMTP 密码
 patch = wbsdk.WatchdogConfigPatch{Mail: &wbsdk.WatchdogMailPatch{Password: wbsdk.Ptr("")}}
+// 清空收件人（值切片写不出这个动作：omitempty 会把 [] 吃掉）
+patch = wbsdk.WatchdogConfigPatch{Mail: &wbsdk.WatchdogMailPatch{To: wbsdk.Ptr([]string{})}}
 ```
 
 **例外：`Settings().SaveAutoUpdate` 是整体替换**（`AutoUpdateConfig` 用值类型），
